@@ -6,6 +6,9 @@ j3AITaskRunner is a Python/Tkinter application for coordinating AI coding workfl
 
 This project was made with AI assistance as an in-house tool. It is useful for the author's workflow, but it is not a polished general-purpose product. Automated test coverage and real-world provider verification are still limited, so validate behavior in your own environment before relying on it.
 
+<img width="465" height="283" alt="j3AITaskRunner" src="https://github.com/user-attachments/assets/b0e204da-85bd-454e-90e6-ab5bdd712ad2" />
+
+
 ## Features
 
 - Manage multiple workspaces from one desktop window.
