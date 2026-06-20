@@ -1,0 +1,60 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+.build-venv/
+venv/
+env/
+ENV/
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.hypothesis/
+
+# Build/distribution artifacts
+build/
+dist/
+lib/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test/coverage outputs
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Runtime/temp files
+*.log
+*.tmp
+*.bak
+log/
+j3aiPromptLoop.json
+j3AITaskRunner.json
+.j3aitaskrunner/
+
+# Editor/OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+.nfs*
+.fuse_hidden*
+.directory
+.Trash-*
+.xsession-errors*
+
+# Project local data
+data/
+tmp_validation/
