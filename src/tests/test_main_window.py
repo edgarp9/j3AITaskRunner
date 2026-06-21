@@ -69,10 +69,13 @@ from ui.main_window import (
 )
 from ui.formatters import failed_activity_text as _failed_activity_text
 from ui.dialogs import (
+    AboutDialog,
+    ABOUT_SOURCE_URL,
     BULK_IMPORT_EXAMPLE_TEXT,
     SETTINGS_AUTHOR_URL,
     BulkPromptImportDialog,
     BulkPromptImportDialogResult,
+    LicenseNoticesDialog,
     ScheduledRunValidationError,
     SettingsDialog,
     default_scheduled_run_time,
@@ -349,6 +352,24 @@ class MainWindowSettingsDialogTests(unittest.TestCase):
             window.status_messages,
         )
         showwarning.assert_not_called()
+
+    def test_open_about_dialog_shows_about_modal(self) -> None:
+        runtime = _RuntimeStub(
+            settings=AppSettings(ui_language="ko"),
+            update_result=SettingsUpdateResult(),
+        )
+        window = _MainWindowStub(runtime)
+
+        with patch("ui.main_window.AboutDialog") as dialog_cls:
+            MainWindow._open_about_dialog(window)
+
+        dialog_cls.assert_called_once_with(
+            window,
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
+            ui_language="ko",
+        )
+        dialog_cls.return_value.show_modal.assert_called_once_with()
 
     def test_open_settings_dialog_applies_font_without_refreshing_outputs(self) -> None:
         existing_settings = AppSettings(output_font_size=12, ui_language="ko")
@@ -632,6 +653,38 @@ class SettingsDialogExecutionControlTests(unittest.TestCase):
         finally:
             _destroy_dialog_and_root(dialog, root)
 
+    def test_settings_dialog_shows_licenses_button_and_opens_notices(self) -> None:
+        root: tk.Tk | None = None
+        dialog: SettingsDialog | None = None
+        try:
+            root = _create_tk_root_or_skip(self)
+            dialog = SettingsDialog(
+                root,
+                AppSettings(ui_language="ko"),
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
+                agent_cli_version_loader=lambda _path, _provider: "agent-cli test",
+                license_notices_loader=lambda: "license notice text",
+            )
+            dialog.withdraw()
+            root.update_idletasks()
+
+            licenses_buttons = _find_widgets_by_text(dialog, "Licenses")
+            self.assertEqual(1, len(licenses_buttons))
+
+            with patch("ui.dialogs.LicenseNoticesDialog") as dialog_cls:
+                licenses_buttons[0].invoke()
+
+            dialog_cls.assert_called_once_with(
+                dialog,
+                notices="license notice text",
+                ui_language="ko",
+            )
+            dialog_cls.return_value.show_modal.assert_called_once_with()
+            dialog = None
+        finally:
+            _destroy_dialog_and_root(dialog, root)
+
     def test_settings_dialog_saves_default_ai_options(self) -> None:
         root: tk.Tk | None = None
         dialog: SettingsDialog | None = None
@@ -879,6 +932,110 @@ class BulkPromptImportDialogTests(unittest.TestCase):
                     root.destroy()
                 except tk.TclError:
                     pass
+
+
+class AboutDialogTests(unittest.TestCase):
+    def test_dialog_shows_about_text_without_licenses_action(self) -> None:
+        root: tk.Tk | None = None
+        dialog: AboutDialog | None = None
+        try:
+            root = _create_tk_root_or_skip(self)
+            dialog = AboutDialog(
+                root,
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
+                about_notice_loader=lambda: (
+                    "j3AITaskRunner\n\n"
+                    "License: GPL-3.0-or-later\n"
+                    "Corresponding Source: same-release source package\n"
+                    "THIRD_PARTY_NOTICES.txt"
+                ),
+                ui_language="ko",
+            )
+            dialog.withdraw()
+            root.update_idletasks()
+
+            about_widgets = [
+                widget
+                for widget in _walk_widgets(dialog)
+                if isinstance(widget, scrolledtext.ScrolledText)
+            ]
+            self.assertEqual(1, len(about_widgets))
+            about_text = about_widgets[0].get("1.0", "end-1c")
+            self.assertIn(APP_NAME, about_text)
+            self.assertNotIn(APP_VERSION, about_text)
+            self.assertIn("GPL-3.0-or-later", about_text)
+            self.assertIn("same-release source package", about_text)
+            self.assertIn("THIRD_PARTY_NOTICES.txt", about_text)
+
+            licenses_buttons = _find_widgets_by_text(dialog, "Licenses")
+            self.assertEqual([], licenses_buttons)
+            dialog = None
+        finally:
+            _destroy_dialog_and_root(dialog, root)
+
+    def test_dialog_shows_version_label_and_source_link(self) -> None:
+        root: tk.Tk | None = None
+        dialog: AboutDialog | None = None
+        try:
+            root = _create_tk_root_or_skip(self)
+            dialog = AboutDialog(
+                root,
+                app_name=APP_NAME,
+                app_version=APP_VERSION,
+                about_notice_loader=lambda: "about notice",
+                ui_language="ko",
+            )
+            dialog.withdraw()
+            root.update_idletasks()
+
+            self.assertEqual(
+                1,
+                len(_find_widgets_by_text(dialog, f"{APP_NAME} {APP_VERSION}")),
+            )
+            self.assertEqual(1, len(_find_widgets_by_text(dialog, "소스 코드")))
+
+            source_link_widgets = _find_widgets_by_text(dialog, ABOUT_SOURCE_URL)
+            self.assertEqual(1, len(source_link_widgets))
+            self.assertEqual("hand2", str(source_link_widgets[0].cget("cursor")))
+
+            with patch("ui.dialogs.webbrowser.open_new_tab", return_value=True) as open_link:
+                dialog._open_source_link()
+
+            open_link.assert_called_once_with(ABOUT_SOURCE_URL)
+            dialog = None
+        finally:
+            _destroy_dialog_and_root(dialog, root)
+
+
+class LicenseNoticesDialogTests(unittest.TestCase):
+    def test_dialog_shows_read_only_license_notices(self) -> None:
+        root: tk.Tk | None = None
+        dialog: LicenseNoticesDialog | None = None
+        try:
+            root = _create_tk_root_or_skip(self)
+            dialog = LicenseNoticesDialog(
+                root,
+                notices="# Licenses\n\nSample notice",
+                ui_language="en",
+            )
+            dialog.withdraw()
+            root.update_idletasks()
+
+            text_widgets = [
+                widget
+                for widget in _walk_widgets(dialog)
+                if isinstance(widget, scrolledtext.ScrolledText)
+            ]
+            self.assertEqual(1, len(text_widgets))
+            self.assertEqual(
+                "# Licenses\n\nSample notice",
+                text_widgets[0].get("1.0", "end-1c"),
+            )
+            self.assertEqual("disabled", str(text_widgets[0].cget("state")))
+            dialog = None
+        finally:
+            _destroy_dialog_and_root(dialog, root)
 
 
 class MainWindowQueueStartTests(unittest.TestCase):

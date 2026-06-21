@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 import unittest
+import zipfile
 
 import build_release
 from app.version import APP_NAME, APP_VERSION
@@ -33,6 +34,23 @@ class ReleasePackagingTests(unittest.TestCase):
             (build_release.ASSETS_DIR / "app_icon.png", "assets"),
             data_entries,
         )
+        self.assertIn(
+            (build_release.PROJECT_LICENSE_FILE, "."),
+            data_entries,
+        )
+        self.assertIn(
+            (build_release.THIRD_PARTY_NOTICES_FILE, "."),
+            data_entries,
+        )
+        self.assertIn(
+            (build_release.ABOUT_FILE, "."),
+            data_entries,
+        )
+        for static_license_file in build_release.STATIC_LICENSE_FILES:
+            self.assertIn(
+                (static_license_file, build_release.LICENSES_DESTINATION),
+                data_entries,
+            )
 
         prompt_files = set(build_release.prompt_markdown_files())
         prompt_entries = {
@@ -50,6 +68,126 @@ class ReleasePackagingTests(unittest.TestCase):
             )
             self.assertNotEqual("assets", destination)
             self.assertTrue(destination.startswith("prompt/"))
+
+    def test_release_notice_data_files_include_generated_python_license(self) -> None:
+        license_file = Path("build") / "release-licenses" / "PYTHON-LICENSE.txt"
+
+        self.assertEqual(
+            (
+                (build_release.PROJECT_LICENSE_FILE, "."),
+                (build_release.THIRD_PARTY_NOTICES_FILE, "."),
+                (build_release.ABOUT_FILE, "."),
+                *(
+                    (static_license_file, build_release.LICENSES_DESTINATION)
+                    for static_license_file in build_release.STATIC_LICENSE_FILES
+                ),
+                (license_file, build_release.LICENSES_DESTINATION),
+            ),
+            build_release.release_notice_data_files((license_file,)),
+        )
+
+    def test_validate_source_package_requires_release_notice_files(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "source.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr(
+                    f"{build_release.SOURCE_PACKAGE_ROOT_NAME}/LICENSE",
+                    "license",
+                )
+                archive.writestr(
+                    f"{build_release.SOURCE_PACKAGE_ROOT_NAME}/THIRD_PARTY_NOTICES.txt",
+                    "notices",
+                )
+                archive.writestr(
+                    f"{build_release.SOURCE_PACKAGE_ROOT_NAME}/about.txt",
+                    "about",
+                )
+
+            build_release.validate_source_package(zip_path)
+
+    def test_validate_binary_package_requires_bundled_notice_files(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "binary.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr(
+                    f"{APP_NAME}/{build_release.LIB_DIR_NAME}/LICENSE",
+                    "license",
+                )
+                archive.writestr(
+                    f"{APP_NAME}/{build_release.LIB_DIR_NAME}/THIRD_PARTY_NOTICES.txt",
+                    "notices",
+                )
+                archive.writestr(
+                    f"{APP_NAME}/{build_release.LIB_DIR_NAME}/about.txt",
+                    "about",
+                )
+
+            build_release.validate_binary_package(zip_path)
+
+    def test_validate_binary_package_reports_missing_notice_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "binary.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr(
+                    f"{APP_NAME}/{build_release.LIB_DIR_NAME}/LICENSE",
+                    "license",
+                )
+
+            with self.assertRaises(build_release.BuildError) as context:
+                build_release.validate_binary_package(zip_path)
+
+        self.assertIn("THIRD_PARTY_NOTICES.txt", str(context.exception))
+        self.assertIn("about.txt", str(context.exception))
+
+    def test_prepare_release_license_files_copies_required_licenses(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_license = temp_path / "LICENSE.txt"
+            source_license.write_text("Python license sample", encoding="utf-8")
+            package_licenses = {
+                ("pyinstaller", "COPYING.txt"): temp_path / "PYINSTALLER-COPYING.txt",
+                ("tkinterdnd2", "LICENSE"): temp_path / "TKINTERDND2-LICENSE.txt",
+            }
+            for path in package_licenses.values():
+                path.write_text(f"{path.name} sample", encoding="utf-8")
+
+            with mock.patch.object(
+                build_release,
+                "python_license_source_path",
+                return_value=source_license,
+            ), mock.patch.object(
+                build_release,
+                "package_license_source_path",
+                side_effect=lambda package_name, license_name: package_licenses[
+                    (package_name, license_name)
+                ],
+            ):
+                license_files = build_release.prepare_release_license_files(
+                    temp_path / "build"
+                )
+
+            copied_by_name = {path.name: path for path in license_files}
+            self.assertEqual(
+                {
+                    build_release.PYTHON_LICENSE_COPY_NAME,
+                    *build_release.PACKAGE_LICENSE_COPY_NAMES,
+                },
+                set(copied_by_name),
+            )
+            self.assertEqual(
+                "Python license sample",
+                copied_by_name[build_release.PYTHON_LICENSE_COPY_NAME].read_text(
+                    encoding="utf-8"
+                ),
+            )
+            self.assertEqual(
+                "PYINSTALLER-COPYING.txt sample",
+                copied_by_name["PYINSTALLER-COPYING.txt"].read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                "TKINTERDND2-LICENSE.txt sample",
+                copied_by_name["TKINTERDND2-LICENSE.txt"].read_text(encoding="utf-8"),
+            )
 
     def test_version_info_file_uses_app_version_constants(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -79,6 +217,9 @@ class ReleasePackagingTests(unittest.TestCase):
             build_release.BUILD_VENV_ROOT / "windows",
             build_release.build_venv_dir("windows"),
         )
+
+    def test_source_package_excludes_generated_runtime_lib_dir(self) -> None:
+        self.assertTrue(build_release._is_source_package_dir_name_excluded("lib"))
 
     def test_venv_python_path_uses_platform_specific_layout(self) -> None:
         venv_dir = Path(".build-venv") / "example"

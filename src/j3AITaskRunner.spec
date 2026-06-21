@@ -5,10 +5,18 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
 from app.version import APP_NAME
-from build_release import _format_version_info_file
+from build_release import (
+    LICENSES_DESTINATION,
+    STATIC_LICENSE_FILES,
+    _format_version_info_file,
+    prepare_release_license_files,
+)
 
 ROOT = Path(SPECPATH)
 ICON_FILE = ROOT / "assets" / "app_icon.ico"
+THIRD_PARTY_NOTICES_FILE = ROOT / "THIRD_PARTY_NOTICES.txt"
+PROJECT_LICENSE_FILE = ROOT / "LICENSE"
+ABOUT_FILE = ROOT / "about.txt"
 VERSION_INFO_FILE = ROOT / "build" / "version_info.txt"
 VERSION_INFO_FILE.parent.mkdir(parents=True, exist_ok=True)
 VERSION_INFO_FILE.write_text(_format_version_info_file(), encoding="utf-8")
@@ -16,6 +24,11 @@ PROMPT_DATAS = [
     (str(path), path.parent.relative_to(ROOT).as_posix())
     for path in sorted((ROOT / "prompt").rglob("*.md"))
     if path.is_file()
+]
+
+LICENSE_DATAS = [
+    (str(path), LICENSES_DESTINATION)
+    for path in (*STATIC_LICENSE_FILES, *prepare_release_license_files(ROOT / "build"))
 ]
 
 
@@ -35,6 +48,10 @@ a = Analysis(
     datas=[
         (str(ROOT / "assets" / "app_icon.ico"), "assets"),
         (str(ROOT / "assets" / "app_icon.png"), "assets"),
+        (str(PROJECT_LICENSE_FILE), "."),
+        (str(THIRD_PARTY_NOTICES_FILE), "."),
+        (str(ABOUT_FILE), "."),
+        *LICENSE_DATAS,
         *PROMPT_DATAS,
         *TKINTERDND2_DATAS,
     ],

@@ -1,0 +1,56 @@
+j3AITaskRunner
+
+Copyright: Copyright (C) 2026 edgarbak9@gmail.com
+License: GNU General Public License v3.0 or later (GPL-3.0-or-later)
+
+
+License
+-------
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+Full license text:
+LICENSE
+
+
+Source Code
+-----------
+
+Corresponding Source for this binary release:
+Same-release source package distributed next to the binary package.
+
+Source repository / release location:
+https://github.com/edgarp9
+
+
+Third-Party Notices
+-------------------
+
+This program uses third-party open source components. Their licenses,
+copyright notices, source URLs, required notices, and release review notes are
+listed in:
+
+THIRD_PARTY_NOTICES.txt
+
+Major third-party component categories include:
+
+- Python, Tcl/Tk, and native libraries bundled by PyInstaller
+- tkinterdnd2 and tkDnD files used for optional drag and drop
+- PyInstaller bootloader and packaging components used for the release
+- Bundled icons, prompt assets, and related resource notices
+
+
+Release Files
+-------------
+
+The source and binary distributions for this release should include:
+
+- LICENSE
+- THIRD_PARTY_NOTICES.txt

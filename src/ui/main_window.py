@@ -65,6 +65,7 @@ from domain import (
 from domain.localization import normalize_ui_language
 
 from .dialogs import (
+    AboutDialog,
     BulkPromptImportDialog,
     PromptViewerDialog,
     ScheduledRunDialog,
@@ -861,11 +862,23 @@ class MainWindow(tk.Tk):
         settings_header = ttk.Frame(settings_frame)
         settings_header.grid(row=0, column=0, sticky="ew")
         settings_header.columnconfigure(0, weight=1)
+        settings_button_row = ttk.Frame(settings_header)
+        settings_button_row.grid(
+            row=0,
+            column=0,
+            sticky="e",
+            pady=self._ui_scale.padding(0, 6),
+        )
         ttk.Button(
-            settings_header,
+            settings_button_row,
+            text=_tr_for(self, "button_about"),
+            command=self._open_about_dialog,
+        ).grid(row=0, column=0, padx=self._ui_scale.padding(0, 6))
+        ttk.Button(
+            settings_button_row,
             text=_tr_for(self, "button_change"),
             command=self._open_settings_dialog,
-        ).grid(row=0, column=0, sticky="e", pady=self._ui_scale.padding(0, 6))
+        ).grid(row=0, column=1)
 
         self._settings_summary_label = ttk.Label(
             settings_frame,
@@ -3204,6 +3217,15 @@ class MainWindow(tk.Tk):
                 )
             )
         return DND_COPY_ACTION
+
+    def _open_about_dialog(self) -> None:
+        dialog = AboutDialog(
+            self,
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
+            ui_language=self._ui_language,
+        )
+        dialog.show_modal()
 
     def _open_settings_dialog(self) -> None:
         previous_settings = self._runtime.settings

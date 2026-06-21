@@ -37,7 +37,7 @@
 - 소스 실행은 Windows와 Linux에서 같은 `main.py` 진입점을 사용하며, Linux에서는 `python3 main.py` 또는 실행 권한이 있는 `./main.py`, Windows에서는 `py main.py` 또는 `python main.py`를 사용한다.
 - AI 실행기 provider별 실행 옵션(모델, 추론 레벨 또는 variant 등)은 설정의 기본값으로 새 워크스페이스/세션에 초기 적용하고, 세션 상단에서 바꾼 선택값은 작업 등록 시점에 작업에 고정한다.
 - 실행 요청에서 timeout, 파일 로그, 실행 파일 경로 같은 실행 운영 설정 스냅샷은 `operational_settings` 필드로 전달하고, 모델/추론 값은 계속 `execution_options`에서 읽는다.
-- 앱 버전은 `app/version.py`의 `APP_VERSION`을 단일 기준으로 관리하며, 메인 창 제목과 설정 대화상자에 표시한다.
+- 앱 버전은 `app/version.py`의 `APP_VERSION`을 단일 기준으로 관리하며, 메인 창 제목, 설정 대화상자, About 창 상단 버전 라벨에 표시한다.
 - 실제 CLI 설치 여부와 계정별 모델 접근권은 로컬 환경에 따라 달라지므로 기본 자동 테스트는 fake executable/Popen 기반 계약 테스트로 수행한다. 실제 CLI 스모크는 명시적 환경 변수 opt-in으로만 실행한다.
 - 현재 구현된 자동 실행 경로는 기본 대화형 `codex`가 아니라 Codex provider의 비대화형 `codex exec --json` 및 `codex exec resume --json`을 사용해야 한다.
 - Codex provider의 세션 ID는 표준 출력 JSONL의 `thread.started.thread_id` 또는 `codex.thread.started.thread_id`에서 얻을 수 있다.
@@ -173,7 +173,8 @@
 - provider 선택 후보는 화면에 `Codex CLI`, `Claude Code`, `Kilo Code`, `OpenCode`, `Pi Coding Agent`로 표시하고, 저장값은 각각 `codex`, `claude_code`, `kilo_code`, `opencode`, `pi`를 사용한다.
 - 왼쪽 사이드바 하단의 설정 요약 라벨은 설정된 실행기 경로가 있는 사용 가능 AI 실행기 목록만 표시하고, 실행기 경로, 글꼴 크기, 파일 로그 상태 같은 다른 설정 항목은 표시하지 않는다.
 - UI 언어는 `ko`와 `en`을 지원하며, 사용자는 화면에서 한국어와 English 중 하나를 선택한다.
-- 설정 대화상자에는 앱 버전, 현재 설정된 AI 실행기의 버전 조회 결과, 하단 GitHub 링크 `https://github.com/edgarp9`를 표시한다.
+- 설정 대화상자에는 앱 버전, 현재 설정된 AI 실행기의 버전 조회 결과, 앱 GPL-3.0 및 제3자 고지를 보여주는 `Licenses` 동작, 하단 GitHub 링크 `https://github.com/edgarp9`를 표시한다. `Licenses` 창에서는 외부 라이브러리와 리소스 목록인 `Notice Inventory`를 표시하고, 내부 배포 관리 섹션인 `Release Checklist`만 표시하지 않는다.
+- About 창에는 상단에 `j3AITaskRunner <version>` 버전 라벨과 소스 코드 링크 `https://github.com/edgarp9`를 표시하고, 아래에는 배포물에 포함된 `about.txt` 내용을 읽기 전용으로 표시한다. `about.txt` 본문에는 앱 버전을 중복 명시하지 않는다. 별도의 `Licenses` 동작은 제공하지 않는다.
 - 세션 상단 또는 프리셋 등록줄 드롭다운에서 모델을 `자동`으로 두면 선택된 provider의 기본 모델을 사용하고, 추론 옵션을 `자동`으로 두면 provider 또는 모델의 기본 추론 옵션을 사용한다.
 - 설정 payload에는 기본 모델 `default_model`과 기본 추론 레벨 `default_reasoning_effort`를 저장한다. 레거시 설정 파일의 `model_reasoning_effort`는 `default_reasoning_effort`로 읽어 마이그레이션하며, 새로 저장하는 설정 payload에는 `model_reasoning_effort`를 포함하지 않는다.
 - Codex provider의 현재 드롭다운 모델 후보는 `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5-codex`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-5-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini`다.
@@ -801,12 +802,17 @@ Python/Tkinter 프로젝트에서는 아래 단방향 의존을 기본으로 한
 1. 릴리즈 빌드는 PyInstaller `onedir` 방식으로 생성하며, `onefile` 방식은 사용하지 않는다.
 2. 산출물 루트는 `dist/<플랫폼이름>/j3AITaskRunner/` 형식을 사용한다.
 3. 실행 파일은 산출물 루트에 두고, 라이브러리와 번들 리소스는 `dist/<플랫폼이름>/j3AITaskRunner/lib/` 아래에 둔다.
-4. 번들 리소스에는 앱 아이콘 파일인 `assets/app_icon.ico`와 `assets/app_icon.png`를 포함한다.
+4. 번들 리소스에는 앱 아이콘 파일인 `assets/app_icon.ico`, `assets/app_icon.png`, 앱 GPL-3.0 라이선스 파일인 `LICENSE`, 제3자 라이선스 고지 문서인 `THIRD_PARTY_NOTICES.txt`, About 표시용 `about.txt`, 앱 아이콘의 `LICENSES/APACHE-2.0.txt`, 빌드 인터프리터의 Python `LICENSE.txt` 사본, PyInstaller 라이선스 사본, `tkinterdnd2` 라이선스 사본을 포함한다. 필요한 라이선스 파일을 찾을 수 없으면 배포 빌드는 실패해야 한다.
 5. Windows 릴리즈 빌드는 `app/version.py`의 앱 버전으로 실행 파일 `FileVersion`과 `ProductVersion` 리소스를 생성한다.
 6. `build_release.py`는 현재 플랫폼 이름 기준의 빌드 전용 venv인 `.build-venv/<플랫폼이름>/`를 준비하고, PyInstaller 6 이상과 `tkinterdnd2`를 venv에 설치한 뒤 같은 스크립트를 venv Python으로 재실행해 빌드한다. POSIX venv의 Python 실행 파일이 시스템 Python을 가리키는 심볼릭 링크일 수 있으므로, venv 실행 여부는 실행 파일의 실제 타깃이 아니라 `sys.prefix`가 빌드 venv인지로 판단한다.
 7. Windows와 Linux의 venv는 실행 파일 위치와 설치되는 바이너리 wheel이 다르므로 서로 공유하지 않고 플랫폼별 venv로 분리한다.
 8. 빌드 스크립트가 자동 설치하는 대상은 Python venv와 pip 패키지로 제한한다. OS 패키지 수준의 Python/Tk 구성 요소가 없으면 사용자가 해당 OS에서 별도로 설치해야 한다.
 9. 빌드 완료 후에는 사용자가 산출물을 바로 확인할 수 있도록 산출물 루트를 OS 파일 탐색기로 연다.
+10. 소스 ZIP에는 현재 프로젝트 소스와 문서만 포함하고, 루트의 생성물성 `lib/`, `build/`, `dist/`, 가상환경, 캐시, 로그, 데이터 디렉터리는 포함하지 않는다.
+11. 공개 배포 전에 PyInstaller 산출물에 포함된 Python/Tcl/Tk/native library, OpenSSL, SQLite, zlib, expat, libffi, bzip2, XZ/liblzma, libmpdec, mimalloc, Zstandard, `tkinterdnd2`, `tkinterdnd2-universal` 유래 파일, tkDnD 바이너리/스크립트 버전을 확인하고, `THIRD_PARTY_NOTICES.txt`의 고지 대상과 맞지 않으면 문서를 먼저 갱신한다.
+12. GPL-3.0 공개 바이너리 배포는 실행 파일만 제공하지 않고, 해당 릴리스 버전에 대응하는 전체 소스 코드 또는 GPL-3.0이 허용하는 소스 제공 방식을 함께 준비한다.
+13. PyInstaller가 수집한 패키지 `LICENSE`, `NOTICE`, `.dist-info` 메타데이터는 기본적으로 배포물에서 제거하지 않는다. 제거가 필요하면 같은 고지 내용을 `THIRD_PARTY_NOTICES.txt`나 별도 라이선스 파일로 보존한 뒤 배포한다.
+14. 앱 아이콘은 Google Material Symbols `checklist` 글리프(codepoint `e6b1`)에서 파생된 Apache-2.0 고지 대상으로 기록하고 `LICENSES/APACHE-2.0.txt`를 배포물에 포함한다. 아이콘 파일이 교체되면 새 아이콘의 패밀리/글리프, 라이선스, 저작권 문구, 필요한 라이선스 파일을 다시 확인한다. 프롬프트 자산이 프로젝트 자체 제작물이 아니라면 공개 배포 전에 해당 출처와 라이선스를 `THIRD_PARTY_NOTICES.txt`에 추가한다.
 
 ## 11. 상태 모델
 

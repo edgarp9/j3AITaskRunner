@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import importlib.metadata
 import importlib.util
 import os
@@ -12,6 +13,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
+import zipfile
 
 from app.version import APP_NAME, APP_VERSION
 
@@ -21,12 +24,81 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 ENTRYPOINT = PROJECT_ROOT / "main.py"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 PROMPT_DIR = PROJECT_ROOT / "prompt"
+THIRD_PARTY_NOTICES_FILE = PROJECT_ROOT / "THIRD_PARTY_NOTICES.txt"
+PROJECT_LICENSE_FILE = PROJECT_ROOT / "LICENSE"
+ABOUT_FILE = PROJECT_ROOT / "about.txt"
+LICENSES_DIR = PROJECT_ROOT / "LICENSES"
 ICON_FILE = ASSETS_DIR / "app_icon.ico"
 BUNDLED_ASSET_FILES = (
     ASSETS_DIR / "app_icon.ico",
     ASSETS_DIR / "app_icon.png",
 )
+LICENSES_DESTINATION = "licenses"
+STATIC_LICENSE_FILES = (LICENSES_DIR / "APACHE-2.0.txt",)
+PYTHON_LICENSE_COPY_NAME = "PYTHON-LICENSE.txt"
+PYTHON_LICENSE_CANDIDATE_NAMES = ("LICENSE.txt", "LICENSE")
+PACKAGE_LICENSE_COPY_TARGETS = (
+    ("pyinstaller", "COPYING.txt", "PYINSTALLER-COPYING.txt"),
+    ("tkinterdnd2", "LICENSE", "TKINTERDND2-LICENSE.txt"),
+)
+PACKAGE_LICENSE_COPY_NAMES = tuple(
+    copy_name for _package_name, _license_name, copy_name in PACKAGE_LICENSE_COPY_TARGETS
+)
 OPTIONAL_COLLECT_ALL_MODULES = ("tkinterdnd2",)
+SOURCE_PACKAGE_NAME = f"{APP_NAME}-{APP_VERSION}-source.zip"
+SOURCE_PACKAGE_ROOT_NAME = f"{APP_NAME}-{APP_VERSION}-source"
+
+SOURCE_PACKAGE_EXCLUDED_DIR_NAMES = frozenset(
+    {
+        ".build-venv",
+        ".eggs",
+        ".git",
+        ".hypothesis",
+        ".idea",
+        ".j3aitaskrunner",
+        ".my",
+        ".mypy_cache",
+        ".nox",
+        ".pyre",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        ".vscode",
+        "__pycache__",
+        "build",
+        "data",
+        "dist",
+        "env",
+        "ENV",
+        "htmlcov",
+        "lib",
+        "log",
+        "pip-wheel-metadata",
+        "site-packages",
+        "tmp_validation",
+        "venv",
+    }
+)
+SOURCE_PACKAGE_EXCLUDED_FILE_NAMES = frozenset(
+    {
+        ".coverage",
+        ".DS_Store",
+        ".directory",
+        "Desktop.ini",
+        "Thumbs.db",
+    }
+)
+SOURCE_PACKAGE_EXCLUDED_SUFFIXES = (
+    ".bak",
+    ".log",
+    ".pyd",
+    ".pyc",
+    ".pyo",
+    ".swp",
+    ".swo",
+    ".tmp",
+)
 
 DIST_ROOT = PROJECT_ROOT / "dist"
 BUILD_ROOT = PROJECT_ROOT / "build"
@@ -235,7 +307,15 @@ def pyinstaller_version() -> str:
 
 def ensure_required_files() -> None:
     """Validate that the files required for the release bundle exist."""
-    required_paths = (ENTRYPOINT, *BUNDLED_ASSET_FILES, PROMPT_DIR)
+    required_paths = (
+        ENTRYPOINT,
+        *BUNDLED_ASSET_FILES,
+        PROMPT_DIR,
+        PROJECT_LICENSE_FILE,
+        THIRD_PARTY_NOTICES_FILE,
+        ABOUT_FILE,
+        *STATIC_LICENSE_FILES,
+    )
     missing_paths = [path for path in required_paths if not path.exists()]
     if missing_paths:
         formatted = "\n".join(f"  - {path}" for path in missing_paths)
@@ -285,7 +365,217 @@ def prompt_data_destination(prompt_file: Path) -> str:
     return relative_parent.as_posix()
 
 
-def pyinstaller_command(platform_dist_dir: Path, platform_build_dir: Path) -> list[str]:
+def python_license_source_path() -> Path | None:
+    """Return the current interpreter license file when it is discoverable."""
+    candidate_roots = [
+        Path(sys.base_prefix),
+        Path(sys.prefix),
+        Path(sysconfig.get_path("stdlib")),
+    ]
+    for root in candidate_roots:
+        for file_name in PYTHON_LICENSE_CANDIDATE_NAMES:
+            candidate = root / file_name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def package_license_source_path(package_name: str, license_file_name: str) -> Path:
+    """Return a package license file from installed distribution metadata."""
+    try:
+        distribution = importlib.metadata.distribution(package_name)
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise BuildError(
+            f"Required package for license collection is not installed: {package_name}"
+        ) from exc
+
+    for distribution_file in distribution.files or ():
+        normalized_file = str(distribution_file).replace("\\", "/")
+        if Path(normalized_file).name != license_file_name:
+            continue
+        candidate = Path(distribution.locate_file(distribution_file))
+        if candidate.is_file():
+            return candidate
+
+    raise BuildError(
+        f"License file {license_file_name!r} was not found for package {package_name}."
+    )
+
+
+def prepare_release_license_files(platform_build_dir: Path) -> tuple[Path, ...]:
+    """Prepare generated license files that should be bundled with the release."""
+    python_license_source = python_license_source_path()
+    if python_license_source is None:
+        raise BuildError(
+            "Python license file was not found for the build interpreter. "
+            "Cannot prepare a distributable release without Python license notice."
+        )
+
+    license_dir = platform_build_dir / "release-licenses"
+    license_dir.mkdir(parents=True, exist_ok=True)
+    python_license_copy = license_dir / PYTHON_LICENSE_COPY_NAME
+    shutil.copyfile(python_license_source, python_license_copy)
+    copied_license_files = [python_license_copy]
+
+    for package_name, license_file_name, copy_name in PACKAGE_LICENSE_COPY_TARGETS:
+        package_license_source = package_license_source_path(
+            package_name,
+            license_file_name,
+        )
+        package_license_copy = license_dir / copy_name
+        shutil.copyfile(package_license_source, package_license_copy)
+        copied_license_files.append(package_license_copy)
+
+    return tuple(copied_license_files)
+
+
+def release_notice_data_files(
+    license_files: Sequence[Path] = (),
+) -> tuple[tuple[Path, str], ...]:
+    """Return notice and license files to include in the PyInstaller bundle."""
+    return (
+        (PROJECT_LICENSE_FILE, "."),
+        (THIRD_PARTY_NOTICES_FILE, "."),
+        (ABOUT_FILE, "."),
+        *((path, LICENSES_DESTINATION) for path in STATIC_LICENSE_FILES),
+        *((path, LICENSES_DESTINATION) for path in license_files),
+    )
+
+
+def binary_package_name(current_platform: str) -> str:
+    """Return the binary release zip filename for one platform."""
+    return f"{APP_NAME}-{APP_VERSION}-{current_platform}.zip"
+
+
+def remove_existing_file(path: Path) -> None:
+    """Remove one existing file artifact."""
+    if not path.exists():
+        return
+    if path.is_dir():
+        raise BuildError(f"Expected a file path, not a directory: {path}")
+    path.unlink()
+
+
+def _is_source_package_file_excluded(path: Path) -> bool:
+    relative_path = path.relative_to(PROJECT_ROOT)
+    for part in relative_path.parts:
+        if _is_source_package_dir_name_excluded(part):
+            return True
+
+    file_name = relative_path.name
+    if file_name in SOURCE_PACKAGE_EXCLUDED_FILE_NAMES:
+        return True
+    if file_name.endswith("~"):
+        return True
+    if file_name.startswith((".coverage.", ".fuse_hidden", ".nfs", ".xsession-errors")):
+        return True
+    return file_name.endswith(SOURCE_PACKAGE_EXCLUDED_SUFFIXES)
+
+
+def _is_source_package_dir_name_excluded(name: str) -> bool:
+    return (
+        name in SOURCE_PACKAGE_EXCLUDED_DIR_NAMES
+        or name.endswith(".egg-info")
+        or name.startswith(".Trash-")
+    )
+
+
+def source_package_files() -> tuple[Path, ...]:
+    """Return project files to include in the source release package."""
+    source_files: list[Path] = []
+    for current_root, dir_names, file_names in os.walk(PROJECT_ROOT):
+        dir_names[:] = [
+            name for name in dir_names if not _is_source_package_dir_name_excluded(name)
+        ]
+        current_path = Path(current_root)
+        for file_name in file_names:
+            path = current_path / file_name
+            if not _is_source_package_file_excluded(path):
+                source_files.append(path)
+    return tuple(sorted(source_files))
+
+
+def package_source_release(platform_dist_dir: Path) -> Path:
+    """Create the same-version source zip required for binary distribution."""
+    platform_dist_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = platform_dist_dir / SOURCE_PACKAGE_NAME
+    remove_existing_file(zip_path)
+
+    source_files = source_package_files()
+    required_files = (PROJECT_LICENSE_FILE, THIRD_PARTY_NOTICES_FILE, ABOUT_FILE)
+    missing_required_files = [path for path in required_files if path not in source_files]
+    if missing_required_files:
+        formatted = "\n".join(f"  - {path}" for path in missing_required_files)
+        raise BuildError(f"Source package is missing required notice file(s):\n{formatted}")
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for source_file in source_files:
+            archive_name = Path(SOURCE_PACKAGE_ROOT_NAME) / source_file.relative_to(
+                PROJECT_ROOT
+            )
+            archive.write(source_file, archive_name.as_posix())
+
+    validate_source_package(zip_path)
+    return zip_path
+
+
+def package_binary_release(
+    release_dir: Path,
+    platform_dist_dir: Path,
+    current_platform: str,
+) -> Path:
+    """Create a binary release zip from the validated PyInstaller onedir output."""
+    platform_dist_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = platform_dist_dir / binary_package_name(current_platform)
+    remove_existing_file(zip_path)
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for release_file in sorted(path for path in release_dir.rglob("*") if path.is_file()):
+            archive_name = release_dir.name / release_file.relative_to(release_dir)
+            archive.write(release_file, archive_name.as_posix())
+
+    validate_binary_package(zip_path)
+    return zip_path
+
+
+def validate_source_package(zip_path: Path) -> None:
+    """Validate that a source zip contains mandatory release notice files."""
+    expected_names = {
+        f"{SOURCE_PACKAGE_ROOT_NAME}/{PROJECT_LICENSE_FILE.name}",
+        f"{SOURCE_PACKAGE_ROOT_NAME}/{THIRD_PARTY_NOTICES_FILE.name}",
+        f"{SOURCE_PACKAGE_ROOT_NAME}/{ABOUT_FILE.name}",
+    }
+    with zipfile.ZipFile(zip_path) as archive:
+        archived_names = set(archive.namelist())
+
+    missing_names = sorted(expected_names - archived_names)
+    if missing_names:
+        formatted = "\n".join(f"  - {name}" for name in missing_names)
+        raise BuildError(f"Source package is missing required file(s):\n{formatted}")
+
+
+def validate_binary_package(zip_path: Path) -> None:
+    """Validate that a binary zip contains mandatory bundled notice files."""
+    expected_names = {
+        f"{APP_NAME}/{LIB_DIR_NAME}/{PROJECT_LICENSE_FILE.name}",
+        f"{APP_NAME}/{LIB_DIR_NAME}/{THIRD_PARTY_NOTICES_FILE.name}",
+        f"{APP_NAME}/{LIB_DIR_NAME}/{ABOUT_FILE.name}",
+    }
+    with zipfile.ZipFile(zip_path) as archive:
+        archived_names = set(archive.namelist())
+
+    missing_names = sorted(expected_names - archived_names)
+    if missing_names:
+        formatted = "\n".join(f"  - {name}" for name in missing_names)
+        raise BuildError(f"Binary package is missing required file(s):\n{formatted}")
+
+
+def pyinstaller_command(
+    platform_dist_dir: Path,
+    platform_build_dir: Path,
+    *,
+    license_files: Sequence[Path] = (),
+) -> list[str]:
     """Build the PyInstaller command for the release."""
     command = [
         sys.executable,
@@ -314,6 +604,9 @@ def pyinstaller_command(platform_dist_dir: Path, platform_build_dir: Path) -> li
 
     for asset_path in BUNDLED_ASSET_FILES:
         command.extend(("--add-data", add_data_argument(asset_path, "assets")))
+
+    for notice_file, destination in release_notice_data_files(license_files):
+        command.extend(("--add-data", add_data_argument(notice_file, destination)))
 
     for prompt_file in prompt_markdown_files():
         command.extend(
@@ -405,8 +698,20 @@ def validate_release_layout(release_dir: Path) -> Path:
         release_dir,
         app_binary,
         lib_dir,
+        lib_dir / PROJECT_LICENSE_FILE.name,
+        lib_dir / THIRD_PARTY_NOTICES_FILE.name,
+        lib_dir / ABOUT_FILE.name,
         lib_dir / "assets" / "app_icon.ico",
         lib_dir / "assets" / "app_icon.png",
+        *(
+            lib_dir / LICENSES_DESTINATION / static_license_file.name
+            for static_license_file in STATIC_LICENSE_FILES
+        ),
+        lib_dir / LICENSES_DESTINATION / PYTHON_LICENSE_COPY_NAME,
+        *(
+            lib_dir / LICENSES_DESTINATION / package_license_name
+            for package_license_name in PACKAGE_LICENSE_COPY_NAMES
+        ),
         lib_dir / "prompt",
     ]
     expected_paths.extend(
@@ -471,7 +776,12 @@ def build_release() -> Path:
     if platform.system().lower() == "windows":
         write_version_info_file(platform_build_dir)
 
-    command = pyinstaller_command(platform_dist_dir, platform_build_dir)
+    license_files = prepare_release_license_files(platform_build_dir)
+    command = pyinstaller_command(
+        platform_dist_dir,
+        platform_build_dir,
+        license_files=license_files,
+    )
     print(f"PyInstaller {pyinstaller}")
     print(f"Build platform: {current_platform}")
     print(f"Release directory: {release_dir}")
@@ -481,7 +791,16 @@ def build_release() -> Path:
     if result.returncode != 0:
         raise BuildError(f"PyInstaller failed with exit code {result.returncode}.")
 
-    return validate_release_layout(release_dir)
+    app_binary = validate_release_layout(release_dir)
+    source_package = package_source_release(platform_dist_dir)
+    binary_package = package_binary_release(
+        release_dir,
+        platform_dist_dir,
+        current_platform,
+    )
+    print(f"Source package: {source_package}")
+    print(f"Binary package: {binary_package}")
+    return app_binary
 
 
 def main() -> int:
