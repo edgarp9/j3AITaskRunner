@@ -409,12 +409,12 @@ GPL-Compatible / Copyleft Components
 The following components require corresponding source or source instructions:
 
 Component: j3AITaskRunner project source
-Version: 0.2.0
+Version: 0.3
 License: GPL-3.0-or-later
-Source: Same-release source package j3AITaskRunner-0.2.0-source.zip
+Source: Same-release source package j3AITaskRunner-0.3-source.zip
 Distribution: Source and binary release artifacts
 Modified: Project code
-Corresponding Source: j3AITaskRunner-0.2.0-source.zip
+Corresponding Source: j3AITaskRunner-0.3-source.zip
 
 Component: PyInstaller bootloader
 Version: 6.21.0
@@ -487,8 +487,8 @@ Sources Checked
 
 - Project build files: build_release.py and j3AITaskRunner.spec.
 - Current release artifacts:
-  dist/windows/j3AITaskRunner-0.2.0-source.zip
-  dist/windows/j3AITaskRunner-0.2.0-windows.zip
+  dist/windows/j3AITaskRunner-0.3-source.zip
+  dist/windows/j3AITaskRunner-0.3-windows.zip
 - Common notice templates: ex_about.txt and ex_THIRD_PARTY_NOTICES.txt.
 - Current package metadata inspected with importlib.metadata from Python 3.14.4
   in the managed Windows build environment.

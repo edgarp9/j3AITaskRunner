@@ -73,6 +73,35 @@ def build_main_window(*, storage_root: Path | None = None) -> MainWindow:
     return MainWindow(runtime)
 
 
+def resolve_startup_workspace_paths(
+    workspace_paths: Sequence[str],
+    *,
+    base_dir: Path | None = None,
+) -> tuple[str, ...]:
+    """Resolve startup workspace paths relative to cwd or an explicit base dir."""
+    resolved_base_dir = base_dir or Path.cwd()
+    return tuple(
+        _resolve_startup_workspace_path(path, base_dir=resolved_base_dir)
+        for path in workspace_paths
+    )
+
+
+def _resolve_startup_workspace_path(workspace_path: str, *, base_dir: Path) -> str:
+    try:
+        path = Path(workspace_path).expanduser()
+        if not path.is_absolute():
+            path = base_dir / path
+        return str(path.resolve())
+    except (OSError, RuntimeError):
+        LOGGER.warning(
+            "Failed to resolve startup workspace path; passing it to runtime. "
+            "workspace_path=%s",
+            workspace_path,
+            exc_info=True,
+        )
+        return workspace_path
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line options for source execution."""
     parser = argparse.ArgumentParser(prog=APP_NAME)
@@ -81,15 +110,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="version",
         version=f"{APP_NAME} {APP_VERSION}",
     )
+    parser.add_argument(
+        "workspace_paths",
+        nargs="*",
+        metavar="workspace_path",
+        help="Workspace path to open after startup.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Start the Tkinter desktop application."""
-    parse_args(argv)
+    args = parse_args(argv)
     configure_logging()
+    startup_workspace_paths = resolve_startup_workspace_paths(args.workspace_paths)
     LOGGER.info("Starting j3AITaskRunner.")
     window = build_main_window()
+    if startup_workspace_paths:
+        window.open_startup_workspaces(startup_workspace_paths)
     window.run()
     return 0
 

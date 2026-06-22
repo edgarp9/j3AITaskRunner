@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from app.version import APP_VERSION
 from infra.license_notices import (
     load_about_notice,
     load_license_notices,
@@ -195,7 +196,7 @@ class LicenseNoticesLoadingTests(unittest.TestCase):
         ):
             self.assertIn(expected_text, notice)
         self.assertNotIn("Version:", notice)
-        self.assertNotIn("0.2.0", notice)
+        self.assertNotIn(APP_VERSION, notice)
 
 
 if __name__ == "__main__":

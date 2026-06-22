@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -74,7 +75,45 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(0, exit_code)
         build_main_window.assert_called_once_with()
+        window.open_startup_workspaces.assert_not_called()
         window.run.assert_called_once_with()
+
+    def test_main_opens_workspace_paths_from_cli_after_building_window(self) -> None:
+        with TemporaryDirectory() as first_workspace:
+            with TemporaryDirectory() as second_workspace:
+                expected_paths = (
+                    str(Path(first_workspace).resolve()),
+                    str(Path(second_workspace).resolve()),
+                )
+                with (
+                    patch("main.configure_logging"),
+                    patch("main.build_main_window") as build_main_window,
+                ):
+                    window = build_main_window.return_value
+                    exit_code = main.main([first_workspace, second_workspace])
+
+        self.assertEqual(0, exit_code)
+        build_main_window.assert_called_once_with()
+        window.open_startup_workspaces.assert_called_once_with(expected_paths)
+        window.run.assert_called_once_with()
+
+    def test_resolve_startup_workspace_paths_resolves_relative_paths_from_cwd(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as working_dir:
+            workspace_dir = Path(working_dir) / "relative-workspace"
+            workspace_dir.mkdir()
+            resolved = main.resolve_startup_workspace_paths(
+                ("relative-workspace",),
+                base_dir=Path(working_dir),
+            )
+
+            self.assertEqual((str(workspace_dir.resolve()),), resolved)
+
+    def test_parse_args_accepts_workspace_paths(self) -> None:
+        args = main.parse_args(["alpha", "beta"])
+
+        self.assertEqual(["alpha", "beta"], args.workspace_paths)
 
     def test_parse_help_exits_without_building_window(self) -> None:
         with contextlib.redirect_stdout(io.StringIO()):

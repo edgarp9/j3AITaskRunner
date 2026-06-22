@@ -200,6 +200,7 @@
 - 선택 또는 최근 작업이 `실패` 상태이면 상단 활동 문구는 `종료: 실패 job-3 (1, 2) Reconnecting... 2/5 (request timed out)` 형식으로 표시하며, 실패 기본 접두어 `실행 실패:`는 반복 표시하지 않는다.
 - 실행 로그를 실시간으로 보고, 워크스페이스 전체 작업 목록에서 실행 순서와 진행 상황을 확인할 수 있어야 한다.
 - 사이드바/메인, 세션 탭/우측 작업 목록, 프롬프트/출력 영역 경계를 마우스로 드래그해 크기를 조절할 수 있어야 한다.
+- 사용자는 왼쪽 사이드바를 좁은 버튼 바만 남기고 접어 메인 작업 영역을 넓히고, 접힌 상태에서도 보이는 버튼으로 다시 펼칠 수 있어야 한다.
 - 가려진 워크스페이스 탭을 다시 표시해도 우측 작업 목록 내용의 요청 폭이 세션 탭 영역을 밀어내지 않아야 한다.
 - 작업 목록 영역 너비가 줄거나 늘면 `순서`, `세션`, `상태`, `프롬프트` 컬럼은 기준 폭 비율을 유지하며 함께 조정되어야 한다.
 - 프롬프트/출력 경계를 조절하면 프롬프트 섹션의 빈 여백이 아니라 프롬프트 에디터 자체의 높이가 함께 변해야 한다.
@@ -383,6 +384,14 @@
 1. 왼쪽 사이드바의 저장된 워크스페이스 영역은 OS 파일 관리자에서 드래그한 폴더 path를 받을 수 있다.
 2. 드롭된 path는 기존 워크스페이스 등록 흐름과 동일하게 처리한다.
 3. 여러 path가 한 번에 드롭되면 각 path를 독립된 워크스페이스 등록 요청으로 처리한다.
+
+### 시작 인자 워크스페이스 열기 규칙
+
+1. 사용자는 `python main.py <workspace_path> [<workspace_path> ...]` 형식으로 앱 시작 시 열 워크스페이스 path를 0개 이상 전달할 수 있다.
+2. 시작 인자 워크스페이스 path는 실행 cwd 기준으로 `Path(path).expanduser().resolve()`한 문자열을 워크스페이스 열기 요청에 사용한다.
+3. 앱 창 생성과 기본 UI 초기화가 끝난 뒤 `after(0, ...)`로 시작 인자 워크스페이스 열기를 예약한다.
+4. 여러 path가 전달되면 인자 순서대로 기존 백그라운드 워크스페이스 열기 흐름에 요청한다.
+5. 유효하지 않은 path가 있어도 앱 시작을 중단하지 않고 기존 워크스페이스 오류 표시 흐름으로 사용자에게 알린다.
 
 ### 작업 목록 컨텍스트 메뉴 규칙
 
@@ -791,7 +800,7 @@ Python/Tkinter 프로젝트에서는 아래 단방향 의존을 기본으로 한
 8. Windows DPI awareness 설정은 Tk 루트 생성 전에 한 번 시도하고, Windows 전용 API 접근은 `infra` 계층의 지연 import 헬퍼에 둔다.
 9. Windows DPI awareness는 관리 도구형 UI 안정성을 위해 `SYSTEM_AWARE` context를 먼저 시도하고, 실패 시 per-monitor context, shcore system/per-monitor, legacy `SetProcessDPIAware()` 순서로 fallback한다.
 10. Tk 루트 생성 직후 현재 DPI를 읽어 `tk scaling`을 적용하고, 기본 Tk UI 폰트는 Windows에서 `Malgun Gothic` 계열로 맞춘다. 출력 로그처럼 기존 고정폭 폰트가 필요한 영역은 `Consolas` 설정을 유지한다.
-11. 프레임 padding, 패널 초기 폭, 프롬프트/출력 패널 높이, Treeview rowheight, classic widget border/highlight 등 내부 픽셀 기반 값만 `UiScale`로 보정한다. 메인 창의 초기 Tk client geometry는 실행 시 1100 x 800을 유지하고, 최소 geometry는 800 x 600을 유지한다. 왼쪽 사이드바 초기 폭은 180 px이고, 워크스페이스 탭 내부 오른쪽 작업 목록 영역 초기 폭은 180 px이며, 세션 영역은 남은 폭을 사용한다. `Entry`, `Combobox`, `Button`, `Text`의 문자 수 기반 `width`/`height` 값은 스케일하지 않는다.
+11. 프레임 padding, 패널 초기 폭, 프롬프트/출력 패널 높이, Treeview rowheight, classic widget border/highlight 등 내부 픽셀 기반 값만 `UiScale`로 보정한다. 메인 창의 초기 Tk client geometry는 실행 시 1100 x 800을 유지하고, 최소 geometry는 800 x 600을 유지한다. 왼쪽 사이드바 초기 폭은 180 px이고, 접힌 상태의 버튼 바 폭은 36 px이며, 워크스페이스 탭 내부 오른쪽 작업 목록 영역 초기 폭은 180 px이고, 세션 영역은 남은 폭을 사용한다. `Entry`, `Combobox`, `Button`, `Text`의 문자 수 기반 `width`/`height` 값은 스케일하지 않는다.
 12. root `<Configure>` 기반 DPI 동기화는 전용 컨트롤러가 담당하며, 연속 이벤트를 debounce하고 같은 DPI이면 아무 작업도 하지 않는다. 종료 시 예약된 DPI 동기화 `after` 콜백은 반드시 취소한다.
 13. DPI 변경 callback에서는 필요한 widget option과 스타일만 다시 적용하고, 창 `geometry()`를 되먹임하지 않는다. Win32 `WM_DPICHANGED` subclassing, native size/move capture 해제, 동기 paint flush 같은 직접 Win32 message-loop 개입은 Tk 앱의 기본 구현으로 사용하지 않는다.
 

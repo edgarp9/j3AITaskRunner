@@ -48,6 +48,7 @@ from ui.main_window import (
     MIN_WINDOW_WIDTH,
     PRESET_COMBOBOX_WIDTH,
     RuntimeUiUpdateBatch,
+    SIDEBAR_COLLAPSED_WIDTH,
     SIDEBAR_INITIAL_WIDTH,
     SESSION_MODEL_COMBOBOX_WIDTH,
     SESSION_PROVIDER_COMBOBOX_WIDTH,
@@ -125,9 +126,63 @@ class MainWindowGeometryTests(unittest.TestCase):
     def test_sidebar_opens_at_requested_width(self) -> None:
         self.assertEqual(180, SIDEBAR_INITIAL_WIDTH)
 
+    def test_sidebar_collapses_to_requested_width(self) -> None:
+        self.assertEqual(36, SIDEBAR_COLLAPSED_WIDTH)
+
     def test_workspace_split_opens_at_screenshot_widths(self) -> None:
         self.assertEqual(560, WORKSPACE_SESSIONS_INITIAL_WIDTH)
         self.assertEqual(180, WORKSPACE_TASK_LIST_INITIAL_WIDTH)
+
+
+class MainWindowSidebarCollapseTests(unittest.TestCase):
+    def test_set_sidebar_collapsed_hides_content_and_remembers_width(self) -> None:
+        window = _SidebarCollapseWindowStub(sash_position=236)
+
+        MainWindow._set_sidebar_collapsed(window, True)
+
+        self.assertTrue(window._sidebar_collapsed)
+        self.assertEqual(236, window._sidebar_restore_width)
+        self.assertEqual(1, window._sidebar_content.grid_remove_calls)
+        self.assertEqual(0, window._sidebar_content.grid_calls)
+        self.assertEqual(">", window._sidebar_toggle_button.text)
+        self.assertEqual(SIDEBAR_COLLAPSED_WIDTH, window._sidebar.width)
+        self.assertEqual(SIDEBAR_COLLAPSED_WIDTH, window._main_splitter.sash_position)
+        self.assertFalse(window._sidebar_restore_button.is_gridded)
+
+    def test_set_sidebar_expanded_restores_previous_width(self) -> None:
+        window = _SidebarCollapseWindowStub(sash_position=SIDEBAR_COLLAPSED_WIDTH)
+        window._sidebar_collapsed = True
+        window._sidebar_restore_width = 236
+
+        MainWindow._set_sidebar_collapsed(window, False)
+
+        self.assertFalse(window._sidebar_collapsed)
+        self.assertEqual(1, window._sidebar_content.grid_calls)
+        self.assertEqual(0, window._sidebar_content.grid_remove_calls)
+        self.assertEqual("<", window._sidebar_toggle_button.text)
+        self.assertEqual(236, window._sidebar.width)
+        self.assertEqual(236, window._main_splitter.sash_position)
+        self.assertFalse(window._sidebar_restore_button.is_gridded)
+
+    def test_restore_button_shows_when_sash_is_hidden_without_collapsed_state(self) -> None:
+        window = _SidebarCollapseWindowStub(sash_position=0)
+
+        MainWindow._refresh_sidebar_restore_button(window)
+
+        self.assertTrue(window._sidebar_restore_button.is_gridded)
+        self.assertEqual(">", window._sidebar_restore_button.text)
+
+    def test_rebuild_static_ui_keeps_sidebar_collapsed_state(self) -> None:
+        window = _SidebarRebuildWindowStub()
+
+        MainWindow._rebuild_static_ui(window)
+
+        self.assertTrue(window._sidebar_collapsed)
+        self.assertEqual(1, window.build_widgets_calls)
+        self.assertEqual(1, window._sidebar_content.grid_remove_calls)
+        self.assertEqual(">", window._sidebar_toggle_button.text)
+        self.assertEqual(SIDEBAR_COLLAPSED_WIDTH, window._sidebar.width)
+        self.assertFalse(window._sidebar_restore_button.is_gridded)
 
 
 class OptionalLabelVisibilityTests(unittest.TestCase):
@@ -3158,6 +3213,32 @@ class MainWindowWorkspaceOpenTests(unittest.TestCase):
         self.assertEqual([r"C:\Repo\Alpha"], runtime.background_open_paths)
         self.assertEqual(["Alpha 열기 중"], window.status_messages)
 
+    def test_open_startup_workspaces_schedules_background_open_requests(self) -> None:
+        runtime = _WorkspaceOpenRuntimeStub()
+        window = _StartupWorkspaceOpenWindowStub(runtime)
+
+        MainWindow.open_startup_workspaces(
+            window,
+            (r"C:\Repo\Alpha", r"C:\Repo\Beta"),
+        )
+
+        self.assertEqual([], runtime.background_open_paths)
+        self.assertEqual([0], window.after_intervals)
+
+        window.run_scheduled_callbacks()
+
+        self.assertEqual([r"C:\Repo\Alpha", r"C:\Repo\Beta"], runtime.background_open_paths)
+        self.assertEqual(["Alpha 열기 중", "Beta 열기 중"], window.status_messages)
+
+    def test_open_startup_workspaces_ignores_empty_paths(self) -> None:
+        runtime = _WorkspaceOpenRuntimeStub()
+        window = _StartupWorkspaceOpenWindowStub(runtime)
+
+        MainWindow.open_startup_workspaces(window, ())
+
+        self.assertEqual([], window.after_intervals)
+        self.assertEqual([], runtime.background_open_paths)
+
     def test_saved_workspace_drop_requests_background_open_for_dropped_paths(self) -> None:
         runtime = _WorkspaceOpenRuntimeStub()
         window = _WorkspaceDropWindowStub(
@@ -3955,10 +4036,143 @@ class _SessionIdCopyWindowStub(_KoreanUiLanguageStub):
         self.status_messages.append(message)
 
 
+class _IdentityUiScaleStub:
+    def px(self, value: int | float) -> int:
+        return int(value)
+
+    def padding(self, *values: int | float) -> int | tuple[int, ...]:
+        scaled = tuple(int(value) for value in values)
+        if len(scaled) == 1:
+            return scaled[0]
+        return scaled
+
+
+class _ConfigurableWidgetStub:
+    def __init__(self) -> None:
+        self.width: int | None = None
+        self.configured_options: list[dict[str, object]] = []
+
+    def configure(self, **options: object) -> None:
+        self.configured_options.append(options)
+        if "width" in options:
+            self.width = int(options["width"])
+
+
+class _GridWidgetStub(_ConfigurableWidgetStub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.grid_calls = 0
+        self.grid_remove_calls = 0
+
+    def grid(self) -> None:
+        self.grid_calls += 1
+
+    def grid_remove(self) -> None:
+        self.grid_remove_calls += 1
+
+
+class _PanedWindowStub:
+    def __init__(self, sash_position: int = SIDEBAR_INITIAL_WIDTH) -> None:
+        self.sash_position = sash_position
+        self.destroy_calls = 0
+        self.width = DEFAULT_WINDOW_WIDTH
+
+    def sashpos(self, index: int, position: int | None = None) -> int | None:
+        self.sashpos_index = index
+        if position is None:
+            return self.sash_position
+        self.sash_position = position
+        return None
+
+    def winfo_width(self) -> int:
+        return self.width
+
+    def destroy(self) -> None:
+        self.destroy_calls += 1
+
+
+class _SidebarCollapseWindowStub:
+    _remember_sidebar_restore_width = MainWindow._remember_sidebar_restore_width
+    _apply_sidebar_layout = MainWindow._apply_sidebar_layout
+    _position_sidebar_sash = MainWindow._position_sidebar_sash
+    _refresh_sidebar_restore_button = MainWindow._refresh_sidebar_restore_button
+    _is_sidebar_sash_hidden = MainWindow._is_sidebar_sash_hidden
+    _expanded_sidebar_width = MainWindow._expanded_sidebar_width
+
+    def __init__(self, *, sash_position: int = SIDEBAR_INITIAL_WIDTH) -> None:
+        self._ui_scale = _IdentityUiScaleStub()
+        self._main_splitter = _PanedWindowStub(sash_position)
+        self._sidebar = _ConfigurableWidgetStub()
+        self._sidebar_content = _GridWidgetStub()
+        self._sidebar_toggle_button = _ButtonConfigureStub()
+        self._sidebar_restore_button = _ButtonConfigureStub()
+        self._sidebar_collapsed = False
+        self._sidebar_restore_width = SIDEBAR_INITIAL_WIDTH
+
+
+class _SidebarRebuildWindowStub:
+    _refresh_sidebar_restore_button = MainWindow._refresh_sidebar_restore_button
+    _is_sidebar_sash_hidden = MainWindow._is_sidebar_sash_hidden
+    _position_sidebar_sash = MainWindow._position_sidebar_sash
+    _expanded_sidebar_width = MainWindow._expanded_sidebar_width
+
+    def __init__(self) -> None:
+        self._ui_scale = _IdentityUiScaleStub()
+        self._workspace_views: dict[str, object] = {}
+        self._workspace_frame_map: dict[str, str] = {}
+        self._session_frame_map: dict[str, tuple[str, str]] = {}
+        self._preset_language_request_ids: dict[str, int] = {}
+        self._preset_instruction_request_ids: dict[str, int] = {}
+        self._job_context_menu = object()
+        self._main_splitter = _PanedWindowStub()
+        self._sidebar = _ConfigurableWidgetStub()
+        self._sidebar_content = _GridWidgetStub()
+        self._sidebar_toggle_button = _ButtonConfigureStub()
+        self._sidebar_restore_button = _ButtonConfigureStub()
+        self._sidebar_collapsed = True
+        self._sidebar_restore_width = 236
+        self._main_area = object()
+        self._status_bar = object()
+        self._settings_summary_label = object()
+        self._scheduled_run_button = object()
+        self._scheduled_run_status_label = object()
+        self._saved_workspace_paths = ["workspace"]
+        self.build_widgets_calls = 0
+        self.refresh_saved_workspace_list_calls = 0
+        self.refresh_scheduled_run_display_calls = 0
+        self.refresh_settings_summary_calls = 0
+        self.rebuild_workspace_tabs_calls = 0
+
+    def _build_widgets(self) -> None:
+        self.build_widgets_calls += 1
+        self._main_splitter = _PanedWindowStub()
+        self._sidebar = _ConfigurableWidgetStub()
+        self._sidebar_content = _GridWidgetStub()
+        self._sidebar_toggle_button = _ButtonConfigureStub()
+        self._sidebar_restore_button = _ButtonConfigureStub()
+        MainWindow._apply_sidebar_layout(self)
+
+    def _refresh_saved_workspace_list(self) -> None:
+        self.refresh_saved_workspace_list_calls += 1
+
+    def _refresh_scheduled_run_display(self) -> None:
+        self.refresh_scheduled_run_display_calls += 1
+
+    def _refresh_settings_summary(self) -> None:
+        self.refresh_settings_summary_calls += 1
+
+    def _rebuild_workspace_tabs(self) -> None:
+        self.rebuild_workspace_tabs_calls += 1
+
+
 class _ButtonConfigureStub:
     def __init__(self) -> None:
         self.text = ""
         self.state = ""
+        self.is_gridded = False
+        self.grid_calls = 0
+        self.grid_remove_calls = 0
+        self.lift_calls = 0
         self.configured_options: list[dict[str, object]] = []
 
     def configure(self, **options: object) -> None:
@@ -3967,6 +4181,17 @@ class _ButtonConfigureStub:
             self.text = str(options["text"])
         if "state" in options:
             self.state = str(options["state"])
+
+    def grid(self) -> None:
+        self.is_gridded = True
+        self.grid_calls += 1
+
+    def grid_remove(self) -> None:
+        self.is_gridded = False
+        self.grid_remove_calls += 1
+
+    def lift(self) -> None:
+        self.lift_calls += 1
 
 
 class _ComboboxConfigureStub:
@@ -4963,6 +5188,17 @@ class _SubmitPromptTextStub:
         if "state" in options:
             self.state = str(options["state"])
 
+    def grid(self) -> None:
+        self.is_gridded = True
+        self.grid_calls += 1
+
+    def grid_remove(self) -> None:
+        self.is_gridded = False
+        self.grid_remove_calls += 1
+
+    def lift(self) -> None:
+        self.lift_calls += 1
+
     def delete(self, start: str, end: str) -> None:
         self.deleted_ranges.append((start, end))
         self.content = ""
@@ -5663,6 +5899,30 @@ class _WorkspaceOpenWindowStub(_KoreanUiLanguageStub):
 
     def _set_status(self, message: str) -> None:
         self.status_messages.append(message)
+
+
+class _StartupWorkspaceOpenWindowStub(_WorkspaceOpenWindowStub):
+    def __init__(self, runtime: _WorkspaceOpenRuntimeStub) -> None:
+        super().__init__(runtime)
+        self.after_intervals: list[int] = []
+        self.after_callbacks: list[object] = []
+
+    def _open_workspace_path(self, workspace_path: str) -> None:
+        MainWindow._open_workspace_path(self, workspace_path)
+
+    def _open_startup_workspace_paths(self, workspace_paths: tuple[str, ...]) -> None:
+        MainWindow._open_startup_workspace_paths(self, workspace_paths)
+
+    def after(self, interval_ms: int, callback: object) -> str:
+        self.after_intervals.append(interval_ms)
+        self.after_callbacks.append(callback)
+        return f"after-{len(self.after_intervals)}"
+
+    def run_scheduled_callbacks(self) -> None:
+        for callback in self.after_callbacks:
+            if not callable(callback):
+                raise AssertionError("scheduled callback is not callable")
+            callback()
 
 
 @dataclass(slots=True, frozen=True)

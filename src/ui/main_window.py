@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
@@ -120,6 +120,7 @@ DEFAULT_WINDOW_HEIGHT = 800
 MIN_WINDOW_WIDTH = 800
 MIN_WINDOW_HEIGHT = 600
 SIDEBAR_INITIAL_WIDTH = 180
+SIDEBAR_COLLAPSED_WIDTH = 36
 MAIN_AREA_MIN_WIDTH = 780
 WORKSPACE_SESSIONS_INITIAL_WIDTH = 560
 WORKSPACE_TASK_LIST_INITIAL_WIDTH = 180
@@ -494,6 +495,11 @@ class MainWindow(tk.Tk):
         self._job_context_menu: tk.Menu | None = None
         self._main_splitter: ttk.Panedwindow | None = None
         self._sidebar: ttk.Frame | None = None
+        self._sidebar_content: ttk.Frame | None = None
+        self._sidebar_toggle_button: ttk.Button | None = None
+        self._sidebar_restore_button: ttk.Button | None = None
+        self._sidebar_collapsed = False
+        self._sidebar_restore_width = self._ui_scale.px(SIDEBAR_INITIAL_WIDTH)
         self._main_area: ttk.Frame | None = None
         self._status_bar: ttk.Label | None = None
         self._settings_summary_label: ttk.Label | None = None
@@ -528,9 +534,26 @@ class MainWindow(tk.Tk):
         self._schedule_event_poll()
         self.mainloop()
 
+    def open_startup_workspaces(self, workspace_paths: Sequence[str]) -> None:
+        """Request startup workspace opens after Tk has processed pending setup."""
+        requested_paths = tuple(workspace_paths)
+        if not requested_paths:
+            return
+        self.after(
+            0,
+            lambda paths=requested_paths: self._open_startup_workspace_paths(paths),
+        )
+
+    def _open_startup_workspace_paths(self, workspace_paths: Sequence[str]) -> None:
+        for workspace_path in workspace_paths:
+            self._open_workspace_path(workspace_path)
+
     def _handle_dpi_metrics_changed(self, metrics: DpiMetrics) -> None:
+        previous_sidebar_default_width = self._ui_scale.px(SIDEBAR_INITIAL_WIDTH)
         self._dpi_metrics = metrics
         self._ui_scale = UiScale.from_metrics(metrics)
+        if self._sidebar_restore_width == previous_sidebar_default_width:
+            self._sidebar_restore_width = self._ui_scale.px(SIDEBAR_INITIAL_WIDTH)
         apply_dark_theme(self, scale=self._ui_scale)
         self._apply_scaled_options_after_dpi_change()
 
@@ -540,8 +563,8 @@ class MainWindow(tk.Tk):
             _safe_configure(
                 self._sidebar,
                 padding=self._ui_scale.padding(12, 12, 10, 12),
-                width=self._ui_scale.px(SIDEBAR_INITIAL_WIDTH),
             )
+            self._apply_sidebar_layout()
         if self._main_area is not None:
             _safe_configure(
                 self._main_area,
@@ -733,6 +756,16 @@ class MainWindow(tk.Tk):
         main_splitter = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
         self._main_splitter = main_splitter
         main_splitter.grid(row=0, column=0, sticky="nsew")
+        main_splitter.bind(
+            "<Configure>",
+            lambda _event: self._refresh_sidebar_restore_button(),
+            add="+",
+        )
+        main_splitter.bind(
+            "<ButtonRelease-1>",
+            lambda _event: self._refresh_sidebar_restore_button(),
+            add="+",
+        )
 
         sidebar = ttk.Frame(
             main_splitter,
@@ -742,9 +775,31 @@ class MainWindow(tk.Tk):
         self._sidebar = sidebar
         sidebar.grid_propagate(False)
         sidebar.columnconfigure(0, weight=1)
-        sidebar.rowconfigure(0, weight=1)
+        sidebar.rowconfigure(1, weight=1)
 
-        saved_list_frame = ttk.Frame(sidebar)
+        sidebar_toggle_row = ttk.Frame(sidebar)
+        sidebar_toggle_row.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            pady=self._ui_scale.padding(0, 8),
+        )
+        sidebar_toggle_row.columnconfigure(0, weight=1)
+        self._sidebar_toggle_button = ttk.Button(
+            sidebar_toggle_row,
+            text="<",
+            width=2,
+            command=self._toggle_sidebar,
+        )
+        self._sidebar_toggle_button.grid(row=0, column=0, sticky="e")
+
+        sidebar_content = ttk.Frame(sidebar)
+        self._sidebar_content = sidebar_content
+        sidebar_content.grid(row=1, column=0, sticky="nsew")
+        sidebar_content.columnconfigure(0, weight=1)
+        sidebar_content.rowconfigure(0, weight=1)
+
+        saved_list_frame = ttk.Frame(sidebar_content)
         saved_list_frame.grid(
             row=0, column=0, sticky="nsew", pady=self._ui_scale.padding(0, 12)
         )
@@ -767,7 +822,7 @@ class MainWindow(tk.Tk):
         saved_scrollbar.grid(row=0, column=1, sticky="ns")
         self._saved_workspaces_listbox.configure(yscrollcommand=saved_scrollbar.set)
 
-        workspace_button_frame = ttk.Frame(sidebar)
+        workspace_button_frame = ttk.Frame(sidebar_content)
         workspace_button_frame.grid(
             row=1,
             column=0,
@@ -826,11 +881,11 @@ class MainWindow(tk.Tk):
             workspace_button_frame,
         )
 
-        settings_frame = ttk.Frame(sidebar)
+        settings_frame = ttk.Frame(sidebar_content)
         settings_frame.grid(row=3, column=0, sticky="ew")
         settings_frame.columnconfigure(0, weight=1)
 
-        scheduled_run_frame = ttk.Frame(sidebar)
+        scheduled_run_frame = ttk.Frame(sidebar_content)
         scheduled_run_frame.grid(
             row=2,
             column=0,
@@ -910,6 +965,7 @@ class MainWindow(tk.Tk):
             main_area,
             weight=1,
         )
+        self._apply_sidebar_layout()
 
         self._workspace_notebook = ttk.Notebook(main_area)
         self._workspace_notebook.grid(row=0, column=0, sticky="nsew")
@@ -925,6 +981,21 @@ class MainWindow(tk.Tk):
         )
         self._empty_state_label.grid(row=0, column=0, sticky="nsew")
 
+        self._sidebar_restore_button = ttk.Button(
+            main_area,
+            text=">",
+            width=2,
+            command=lambda: self._set_sidebar_collapsed(False),
+        )
+        self._sidebar_restore_button.grid(
+            row=0,
+            column=0,
+            sticky="nw",
+            padx=self._ui_scale.padding(4, 0),
+            pady=self._ui_scale.padding(4, 0),
+        )
+        self._sidebar_restore_button.grid_remove()
+
         status_bar = ttk.Label(
             main_area,
             textvariable=self._status_message_var,
@@ -936,6 +1007,113 @@ class MainWindow(tk.Tk):
         status_bar.grid(
             row=1, column=0, sticky="ew", pady=self._ui_scale.padding(12, 0)
         )
+
+    def _toggle_sidebar(self) -> None:
+        self._set_sidebar_collapsed(not self._sidebar_collapsed)
+
+    def _set_sidebar_collapsed(self, collapsed: bool) -> None:
+        if collapsed and not self._sidebar_collapsed:
+            self._remember_sidebar_restore_width()
+        self._sidebar_collapsed = collapsed
+        self._apply_sidebar_layout()
+
+    def _remember_sidebar_restore_width(self) -> None:
+        main_splitter = self._main_splitter
+        if main_splitter is None:
+            return
+
+        try:
+            sidebar_width = int(main_splitter.sashpos(0))
+        except (tk.TclError, TypeError, ValueError):
+            LOGGER.debug("Failed to read sidebar sash position.", exc_info=True)
+            return
+
+        if sidebar_width > self._ui_scale.px(SIDEBAR_COLLAPSED_WIDTH):
+            self._sidebar_restore_width = sidebar_width
+
+    def _apply_sidebar_layout(self) -> None:
+        sidebar = self._sidebar
+        sidebar_content = self._sidebar_content
+        sidebar_toggle_button = self._sidebar_toggle_button
+        main_splitter = self._main_splitter
+        if sidebar is None or sidebar_content is None or sidebar_toggle_button is None:
+            return
+
+        collapsed_width = self._ui_scale.px(SIDEBAR_COLLAPSED_WIDTH)
+        if self._sidebar_collapsed:
+            sidebar_width = collapsed_width
+            sidebar_padding = self._ui_scale.padding(2, 12, 2, 12)
+            sidebar_content.grid_remove()
+            toggle_text = ">"
+        else:
+            sidebar_width = self._expanded_sidebar_width(collapsed_width)
+            sidebar_padding = self._ui_scale.padding(12, 12, 10, 12)
+            sidebar_content.grid()
+            toggle_text = "<"
+
+        _safe_configure(sidebar, padding=sidebar_padding, width=sidebar_width)
+        _safe_configure(sidebar_toggle_button, text=toggle_text, width=2)
+        self._refresh_sidebar_restore_button()
+        self._position_sidebar_sash(sidebar_width)
+
+    def _position_sidebar_sash(self, sidebar_width: int) -> None:
+        main_splitter = self._main_splitter
+        if main_splitter is None:
+            return
+
+        try:
+            splitter_width = main_splitter.winfo_width()
+        except (AttributeError, tk.TclError):
+            splitter_width = None
+
+        if splitter_width is not None and splitter_width <= 1:
+            try:
+                self.after_idle(
+                    lambda width=sidebar_width: self._position_sidebar_sash(width)
+                )
+            except tk.TclError:
+                LOGGER.debug(
+                    "Failed to schedule sidebar sash positioning.", exc_info=True
+                )
+            return
+
+        try:
+            main_splitter.sashpos(0, sidebar_width)
+        except tk.TclError:
+            LOGGER.debug("Failed to set sidebar sash position.", exc_info=True)
+            return
+
+        self._refresh_sidebar_restore_button()
+
+    def _refresh_sidebar_restore_button(self) -> None:
+        restore_button = self._sidebar_restore_button
+        if restore_button is None:
+            return
+
+        if self._is_sidebar_sash_hidden():
+            _safe_configure(restore_button, text=">", width=2)
+            restore_button.grid()
+            restore_button.lift()
+        else:
+            restore_button.grid_remove()
+
+    def _is_sidebar_sash_hidden(self) -> bool:
+        main_splitter = self._main_splitter
+        if main_splitter is not None:
+            try:
+                hidden_threshold = max(
+                    1,
+                    self._ui_scale.px(SIDEBAR_COLLAPSED_WIDTH) // 2,
+                )
+                return int(main_splitter.sashpos(0)) <= hidden_threshold
+            except (tk.TclError, TypeError, ValueError):
+                LOGGER.debug("Failed to read sidebar sash position.", exc_info=True)
+        return False
+
+    def _expanded_sidebar_width(self, collapsed_width: int) -> int:
+        if self._sidebar_restore_width > collapsed_width:
+            return self._sidebar_restore_width
+        return self._ui_scale.px(SIDEBAR_INITIAL_WIDTH)
 
     def _rebuild_static_ui(self) -> None:
         """Recreate static widgets when the display language changes."""
@@ -950,6 +1128,9 @@ class MainWindow(tk.Tk):
         self._job_context_menu = None
         self._main_splitter = None
         self._sidebar = None
+        self._sidebar_content = None
+        self._sidebar_toggle_button = None
+        self._sidebar_restore_button = None
         self._main_area = None
         self._status_bar = None
         self._settings_summary_label = None

@@ -1,5 +1,24 @@
 # 개발 기록
 
+## 2026-06-22 v0.3 버전 갱신
+
+### 변경 요약
+
+- 앱 단일 버전 기준인 `app/version.py`의 `APP_VERSION`을 `0.3`으로 갱신했다.
+- 릴리즈 고지의 j3AITaskRunner 프로젝트 소스 버전과 산출물 파일명을 `0.3` 기준으로 맞췄다.
+- 메인 창 제목, `--version` 출력, 설정 대화상자, About 창, Windows 릴리즈 버전 리소스는 기존 단일 상수 참조를 통해 새 버전을 사용한다.
+
+### 최종 검증
+
+- `python -m compileall main.py app domain infra ui tests`
+  결과: 통과.
+- `python -m unittest tests.test_main tests.test_build_release tests.test_license_notices`
+  결과: 통과.
+
+### 남은 리스크
+
+- 실제 PyInstaller 릴리즈 빌드는 수행하지 않았다. 빌드 리소스 문자열 생성은 `tests.test_build_release`에서 검증한다.
+
 ## 2026-06-20 v0.2.0 버전 갱신
 
 ### 변경 요약
