@@ -43,11 +43,16 @@ def _parent_directory(path_text: str) -> Path:
     return Path(path_text).resolve().parent
 
 
-def build_runtime(*, storage_root: Path | None = None) -> AppRuntime:
+def build_runtime(
+    *,
+    storage_root: Path | None = None,
+    app_base_dir: Path | None = None,
+) -> AppRuntime:
     """Build the application runtime with persistence and process runner wiring."""
     resolved_storage_root = storage_root or resolve_default_storage_root()
+    resolved_app_base_dir = app_base_dir or resolved_storage_root
     repository = LocalJsonRepository(resolved_storage_root)
-    prompt_store = PromptStore(resolved_storage_root)
+    prompt_store = PromptStore(resolved_app_base_dir)
     runner = ProviderAgentCliProcessRunner(
         resolved_storage_root / APP_ARTIFACT_DIR_NAME / "artifacts"
     )
@@ -55,21 +60,31 @@ def build_runtime(*, storage_root: Path | None = None) -> AppRuntime:
     runtime: AppRuntime | None = None
     controller = AppController(
         runner=runner,
-        settings_provider=lambda: runtime.settings if runtime is not None else AppSettings(),
+        settings_provider=lambda: (
+            runtime.settings if runtime is not None else AppSettings()
+        ),
     )
     runtime = AppRuntime(
         controller=controller,
         repository=repository,
         prompt_store=prompt_store,
         system_sleep_preventer=SystemSleepPreventer(),
+        file_drop_dir=resolved_app_base_dir / "watch",
     )
     return runtime
 
 
-def build_main_window(*, storage_root: Path | None = None) -> MainWindow:
+def build_main_window(
+    *,
+    storage_root: Path | None = None,
+    app_base_dir: Path | None = None,
+) -> MainWindow:
     """Build the Tkinter main window for execution or smoke testing."""
     configure_windows_dpi_awareness()
-    runtime = build_runtime(storage_root=storage_root)
+    if app_base_dir is None:
+        runtime = build_runtime(storage_root=storage_root)
+    else:
+        runtime = build_runtime(storage_root=storage_root, app_base_dir=app_base_dir)
     return MainWindow(runtime)
 
 
@@ -84,6 +99,28 @@ def resolve_startup_workspace_paths(
         _resolve_startup_workspace_path(path, base_dir=resolved_base_dir)
         for path in workspace_paths
     )
+
+
+def resolve_data_dir_path(
+    data_dir: str | None, *, base_dir: Path | None = None
+) -> Path | None:
+    """Resolve an optional persistent data directory argument."""
+    if data_dir is None:
+        return None
+
+    resolved_base_dir = base_dir or Path.cwd()
+    try:
+        path = Path(data_dir).expanduser()
+        if not path.is_absolute():
+            path = resolved_base_dir / path
+        return path.resolve()
+    except (OSError, RuntimeError):
+        LOGGER.warning(
+            "Failed to resolve data directory; passing it to runtime. data_dir=%s",
+            data_dir,
+            exc_info=True,
+        )
+        return Path(data_dir)
 
 
 def _resolve_startup_workspace_path(workspace_path: str, *, base_dir: Path) -> str:
@@ -111,6 +148,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         version=f"{APP_NAME} {APP_VERSION}",
     )
     parser.add_argument(
+        "--data-dir",
+        metavar="path",
+        help="Directory for persistent app data and execution artifacts.",
+    )
+    parser.add_argument(
+        "--ui-smoke-report",
+        metavar="path",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--ui-smoke-timeout",
+        type=float,
+        default=30.0,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "workspace_paths",
         nargs="*",
         metavar="workspace_path",
@@ -124,8 +177,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     configure_logging()
     startup_workspace_paths = resolve_startup_workspace_paths(args.workspace_paths)
+    storage_root = resolve_data_dir_path(args.data_dir)
+    app_base_dir = resolve_default_storage_root() if storage_root is not None else None
     LOGGER.info("Starting j3AITaskRunner.")
-    window = build_main_window()
+    if storage_root is None:
+        window = build_main_window()
+    else:
+        window = build_main_window(
+            storage_root=storage_root,
+            app_base_dir=app_base_dir,
+        )
+    if args.ui_smoke_report is not None:
+        from tools.ui_smoke.app_process import run_ui_smoke
+
+        return run_ui_smoke(
+            window=window,
+            workspace_paths=startup_workspace_paths,
+            report_path=Path(args.ui_smoke_report),
+            timeout_seconds=args.ui_smoke_timeout,
+        )
     if startup_workspace_paths:
         window.open_startup_workspaces(startup_workspace_paths)
     window.run()

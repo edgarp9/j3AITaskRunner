@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from domain import JobStatus, QueueStopReason
@@ -103,75 +104,26 @@ def classify_timeout_result(result: AgentRunResult) -> str | None:
 
 
 def format_progress_event(event: AgentStreamEvent) -> str:
-    """Convert one JSONL event into a concise progress log entry."""
-    if event.event_type == "thread.started":
-        if event.thread_id:
-            return f"세션 시작: {event.thread_id}"
-        return "세션 시작"
+    """Return the full provider progress line for the UI log."""
+    if event.raw_line is not None:
+        raw_line = event.raw_line.rstrip("\r\n")
+        if raw_line:
+            return raw_line
 
-    if event.event_type == "turn.completed":
-        return "응답 완료"
+    if event.payload:
+        return _serialize_progress_payload(event.payload)
 
-    if event.event_type == "turn.failed":
-        return _with_reason("응답 실패:", event.message)
+    if event.message is not None:
+        return event.message
 
-    if event.event_type == "error":
-        return _with_reason("실행 오류:", event.message)
-
-    detail = _extract_event_detail(event)
-    if detail:
-        return f"{event.event_type}: {detail}"
     return event.event_type
 
 
-def _extract_event_detail(event: AgentStreamEvent) -> str | None:
-    if event.message:
-        return _compact_text(event.message)
-
-    return _extract_payload_detail(event.payload)
-
-
-def _extract_payload_detail(payload: dict[str, Any]) -> str | None:
-    item = payload.get("item")
-    if isinstance(item, dict):
-        item_detail = _extract_item_detail(item)
-        if item_detail:
-            return item_detail
-
-    for key in ("message", "detail", "text", "summary", "status"):
-        value = _compact_optional_text(payload.get(key))
-        if value:
-            return value
-
-    return None
-
-
-def _extract_item_detail(item: dict[str, Any]) -> str | None:
-    item_type = _compact_optional_text(item.get("type"))
-    for key in ("text", "message", "command", "summary", "name", "status"):
-        value = _compact_optional_text(item.get(key))
-        if not value:
-            continue
-        if item_type and item_type != "agent_message":
-            return f"{item_type}: {value}"
-        return value
-
-    return item_type
-
-
-def _compact_optional_text(value: Any, *, max_length: int = 120) -> str | None:
-    if not isinstance(value, str):
-        return None
-
-    compacted = _compact_text(value, max_length=max_length)
-    return compacted or None
-
-
-def _compact_text(value: str, *, max_length: int = 120) -> str:
-    compacted = " ".join(value.split())
-    if len(compacted) > max_length:
-        return f"{compacted[: max_length - 1]}…"
-    return compacted
+def _serialize_progress_payload(payload: dict[str, Any]) -> str:
+    try:
+        return json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return repr(payload)
 
 
 def _classify_timeout_failure_reason(failure_reason: str | None) -> str | None:

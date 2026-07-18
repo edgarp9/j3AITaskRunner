@@ -15,16 +15,24 @@ SessionTabId: TypeAlias = str
 JobId: TypeAlias = str
 SessionId: TypeAlias = str
 AgentProvider: TypeAlias = str
+QueueMode: TypeAlias = str
 
 EXECUTION_CONTROL_TIMEOUT_MINUTES_MAX = 525_600
 TERMINATION_GRACE_SECONDS_MAX = 86_400
 DEFAULT_AGENT_PROVIDER: AgentProvider = "codex"
+QUEUE_MODE_PER_WORKSPACE: QueueMode = "per_workspace"
+QUEUE_MODE_SHARED: QueueMode = "shared"
+DEFAULT_QUEUE_MODE: QueueMode = QUEUE_MODE_PER_WORKSPACE
 SUPPORTED_AGENT_PROVIDERS: tuple[AgentProvider, ...] = (
     "codex",
     "claude_code",
     "kilo_code",
     "opencode",
     "pi",
+)
+SUPPORTED_QUEUE_MODES: tuple[QueueMode, ...] = (
+    QUEUE_MODE_PER_WORKSPACE,
+    QUEUE_MODE_SHARED,
 )
 _AGENT_PROVIDER_ALIASES: dict[str, AgentProvider] = {
     "open_code": "opencode",
@@ -43,6 +51,17 @@ def utc_now() -> datetime:
 def normalize_agent_provider(value: object) -> AgentProvider:
     """Return a supported agent provider, falling back to the current default."""
     return _normalize_agent_provider_key(value) or DEFAULT_AGENT_PROVIDER
+
+
+def normalize_queue_mode(value: object) -> QueueMode:
+    """Return a supported queue mode, falling back to the current default."""
+    if not isinstance(value, str):
+        return DEFAULT_QUEUE_MODE
+
+    candidate = "_".join(value.strip().lower().replace("-", "_").split())
+    if candidate in SUPPORTED_QUEUE_MODES:
+        return candidate
+    return DEFAULT_QUEUE_MODE
 
 
 def normalize_agent_executable_paths(value: object) -> dict[AgentProvider, str]:
@@ -109,6 +128,13 @@ class SessionTabKind(str, Enum):
     PRESET_CANDIDATE = "preset_candidate"
 
 
+class StepExecutionMode(str, Enum):
+    """How imported Step blocks are registered into sessions."""
+
+    SINGLE_SESSION = "single_session"
+    PER_STEP_SESSION = "per_step_session"
+
+
 class JobStatus(str, Enum):
     """Execution lifecycle state of a job."""
 
@@ -133,14 +159,16 @@ class AppSettings:
     execution_timeout_minutes: int = 120
     inactivity_timeout_minutes: int = 30
     termination_grace_seconds: int = 5
-    file_logging_enabled: bool = True
+    file_logging_enabled: bool = False
     ui_language: str = "en"
     agent_provider: AgentProvider = DEFAULT_AGENT_PROVIDER
     default_model: str = ""
     default_reasoning_effort: str = ""
+    queue_mode: QueueMode = DEFAULT_QUEUE_MODE
 
     def __post_init__(self) -> None:
         normalized_provider = normalize_agent_provider(self.agent_provider)
+        normalized_queue_mode = normalize_queue_mode(self.queue_mode)
         executable_paths = normalize_agent_executable_paths(self.executable_paths)
         executable_path = _normalize_optional_text(self.executable_path)
         if executable_path is not None:
@@ -153,6 +181,7 @@ class AppSettings:
             "agent_provider",
             normalized_provider,
         )
+        object.__setattr__(self, "queue_mode", normalized_queue_mode)
         object.__setattr__(
             self,
             "default_model",
@@ -285,6 +314,38 @@ def _normalize_execution_option(value: object) -> str:
 
 
 @dataclass(slots=True, frozen=True)
+class SessionExitHookConfig:
+    """Runtime-only external command configuration for one session completion."""
+
+    enabled: bool = False
+    executable_path: str = ""
+    arguments: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled", bool(self.enabled))
+        object.__setattr__(
+            self,
+            "executable_path",
+            self.executable_path.strip()
+            if isinstance(self.executable_path, str)
+            else "",
+        )
+        normalized_arguments: list[str] = []
+        for argument in self.arguments:
+            if not isinstance(argument, str):
+                continue
+            normalized_argument = argument.strip()
+            if normalized_argument:
+                normalized_arguments.append(normalized_argument)
+        object.__setattr__(self, "arguments", tuple(normalized_arguments))
+
+    @property
+    def is_runnable(self) -> bool:
+        """Return whether this hook has enough information to be launched."""
+        return self.enabled and bool(self.executable_path)
+
+
+@dataclass(slots=True, frozen=True)
 class SessionTab:
     """Runtime state of a session tab inside a workspace tab."""
 
@@ -298,6 +359,7 @@ class SessionTab:
     execution_options: AgentExecutionOptions = field(
         default_factory=AgentExecutionOptions
     )
+    exit_hook: SessionExitHookConfig = field(default_factory=SessionExitHookConfig)
     execution_options_locked: bool = False
     open_state: TabOpenState = TabOpenState.OPEN
     sort_order: int = 0
@@ -373,3 +435,4 @@ class SessionTurnHistory:
     completed_at: datetime | None
     last_activity_at: datetime
     job_id: JobId | None = None
+    error_text: str | None = None

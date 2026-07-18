@@ -22,23 +22,32 @@ class SelectOption:
 
 
 SUPPORTED_CODEX_MODEL_IDS: Final[tuple[str, ...]] = (
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
-    "gpt-5-codex",
-    "gpt-5.3-codex",
-    "gpt-5.2-codex",
-    "gpt-5.1-codex-max",
-    "gpt-5.1-codex",
-    "gpt-5.1-codex-mini",
-    "gpt-5.2",
-    "gpt-5.1",
-    "gpt-5",
-    "gpt-5-mini",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    "o4-mini",
+    "gpt-5.3-codex-spark",
+)
+REMOVED_CODEX_MODEL_IDS: Final[frozenset[str]] = frozenset(
+    (
+        "gpt-5.6",
+        "gpt-5.3-codex",
+        "gpt-5-codex",
+        "gpt-5.2-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2",
+        "gpt-5.1",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "o4-mini",
+    )
 )
 
 SUPPORTED_REASONING_EFFORTS: Final[tuple[str, ...]] = (
@@ -48,6 +57,21 @@ SUPPORTED_REASONING_EFFORTS: Final[tuple[str, ...]] = (
     "medium",
     "high",
     "xhigh",
+)
+_GPT_5_6_SOL_TERRA_REASONING_EFFORTS: Final[tuple[str, ...]] = (
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
+_GPT_5_6_LUNA_REASONING_EFFORTS: Final[tuple[str, ...]] = (
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
 )
 SUPPORTED_PI_THINKING_LEVELS: Final[tuple[str, ...]] = (
     "off",
@@ -153,11 +177,17 @@ def build_model_select_options(
 ) -> tuple[SelectOption, ...]:
     """Return model choices for agent CLI option controls."""
     normalized_provider = normalize_agent_provider(agent_provider)
+    excluded_current_values = (
+        REMOVED_CODEX_MODEL_IDS
+        if normalized_provider == DEFAULT_AGENT_PROVIDER
+        else frozenset()
+    )
     return _build_select_options(
         auto_label=auto_label,
         saved_value_suffix=saved_value_suffix,
         supported_values=_PROVIDER_MODEL_IDS.get(normalized_provider, ()),
         current_value=current_value,
+        excluded_current_values=excluded_current_values,
     )
 
 
@@ -201,6 +231,10 @@ def find_option_label(options: tuple[SelectOption, ...], current_value: str | No
 
 def _codex_reasoning_efforts_for_model(model: str | None) -> tuple[str, ...]:
     normalized_model = (model or "").strip().lower()
+    if normalized_model in {"gpt-5.6-sol", "gpt-5.6-terra"}:
+        return _GPT_5_6_SOL_TERRA_REASONING_EFFORTS
+    if normalized_model == "gpt-5.6-luna":
+        return _GPT_5_6_LUNA_REASONING_EFFORTS
     if normalized_model.startswith("gpt-4.1"):
         return ()
     return SUPPORTED_REASONING_EFFORTS
@@ -212,6 +246,7 @@ def _build_select_options(
     saved_value_suffix: str,
     supported_values: tuple[str, ...],
     current_value: str | None,
+    excluded_current_values: frozenset[str] = frozenset(),
 ) -> tuple[SelectOption, ...]:
     normalized_current_value = (current_value or "").strip()
     options: list[SelectOption] = [SelectOption(label=auto_label, value="")]
@@ -229,7 +264,11 @@ def _build_select_options(
         )
         seen_values.add(normalized_supported_value)
 
-    if normalized_current_value and normalized_current_value not in seen_values:
+    if (
+        normalized_current_value
+        and normalized_current_value not in seen_values
+        and normalized_current_value not in excluded_current_values
+    ):
         options.append(
             SelectOption(
                 label=f"{normalized_current_value} ({saved_value_suffix})",

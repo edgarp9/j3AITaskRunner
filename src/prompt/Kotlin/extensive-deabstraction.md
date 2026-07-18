@@ -8,7 +8,7 @@
 
 버그 수정, 성능 최적화, 일반 스타일 개선, 단순 책임 분리 리팩토링은 모두 후보에서 제외한다. 
 
-제외 경로/패턴: dist/, .git/, .my/, build/, log/, pycache/, *.pyd, *.pyc, *.pyo, *$py.class, .venv/, venv/, env/, ENV/, site-packages/, .ruff_cache/, .pytest_cache/, .mypy_cache/, .pyre/, .hypothesis/, .tox/, .nox/, .eggs/, .egg-info/, pip-wheel-metadata/, .coverage, .coverage., coverage.xml, htmlcov/, *.log, *.tmp, .bak, .vscode/, .idea/, .DS_Store, Thumbs.db, Desktop.ini, ~, .swp, .swo, .nfs, .fuse_hidden, .directory, .Trash-, .xsession-errors, data/
+제외 경로/패턴: dist/, .git/, .my/, build/, log/, __pycache__/, *.pyd, *.pyc, *.pyo, *$py.class, .venv/, venv/, env/, ENV/, site-packages/, .ruff_cache/, .pytest_cache/, .mypy_cache/, .pyre/, .hypothesis/, .tox/, .nox/, .eggs/, *.egg-info/, pip-wheel-metadata/, .coverage, .coverage.*, coverage.xml, htmlcov/, *.log, *.tmp, *.bak, .vscode/, .idea/, .DS_Store, Thumbs.db, Desktop.ini, *~, *.swp, *.swo, .nfs*, .fuse_hidden*, .directory, .Trash-*, .xsession-errors*, data/
 
 위 제외 경로/패턴과 일치하는 파일·디렉터리 및 그 하위 항목은 읽기, 검색, 후보 탐색, evidence 인용, 수정 후보 산정, 수정 지시문 생성 대상에서 모두 제외한다. 또한 해당 경로 내부에서는 파일 생성, 수정, 삭제, 이동, 이름 변경, 포맷팅을 수행하지 않는다.
 
@@ -38,5 +38,4 @@
     }
   ]
 }
-
 

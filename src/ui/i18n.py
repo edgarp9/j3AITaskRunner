@@ -175,14 +175,74 @@ def _localize_runtime_fragments(message: str) -> str:
 def localize_progress_line(line: str, language: str | None = None) -> str:
     """Translate a buffered progress log line when it is one of our known messages."""
     if normalize_ui_language(language) == SOURCE_RUNTIME_LANGUAGE:
-        return line
+        return _apply_progress_line_breaks(line)
 
     stripped = line.strip()
     exact = RUNTIME_EXACT_LINES.get(stripped)
     if exact is not None:
         _key, translated = exact
-        return translated
-    return localize_runtime_message(line, language)
+        return _apply_progress_line_breaks(translated)
+    return _apply_progress_line_breaks(localize_runtime_message(line, language))
+
+
+def _apply_progress_line_breaks(line: str) -> str:
+    if "\\" not in line:
+        return line
+
+    parts: list[str] = []
+    index = 0
+    changed = False
+    line_length = len(line)
+    while index < line_length:
+        if line[index] != "\\":
+            parts.append(line[index])
+            index += 1
+            continue
+
+        slash_start = index
+        while index < line_length and line[index] == "\\":
+            index += 1
+        slash_count = index - slash_start
+        if (
+            index < line_length
+            and slash_count % 2 == 1
+            and line[index] in ("r", "n")
+        ):
+            parts.append("\\" * (slash_count // 2))
+            escaped_char = line[index]
+            index += 1
+            parts.append("\n")
+            changed = True
+            if escaped_char == "r":
+                index = _consume_following_newline_escape(line, index, parts)
+            continue
+
+        parts.append("\\" * slash_count)
+
+    if not changed:
+        return line
+    return "".join(parts)
+
+
+def _consume_following_newline_escape(
+    line: str,
+    index: int,
+    parts: list[str],
+) -> int:
+    if index >= len(line) or line[index] != "\\":
+        return index
+
+    slash_start = index
+    while index < len(line) and line[index] == "\\":
+        index += 1
+
+    slash_count = index - slash_start
+    if index < len(line) and slash_count % 2 == 1 and line[index] == "n":
+        parts.append("\\" * (slash_count // 2))
+        return index + 1
+
+    parts.append("\\" * slash_count)
+    return index
 
 
 class UiLocalizer:

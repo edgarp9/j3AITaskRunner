@@ -3,7 +3,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from ui.text_context_menu import bind_editable_text_context_menu
+from ui.text_context_menu import (
+    bind_editable_text_context_menu,
+    bind_readonly_text_context_menu,
+)
 
 
 class EditableTextContextMenuTests(unittest.TestCase):
@@ -51,6 +54,36 @@ class EditableTextContextMenuTests(unittest.TestCase):
             ["Cut", "Copy", "Paste", "Select All"],
             widget._editable_text_context_menu.command_labels,
         )
+
+
+class ReadonlyTextContextMenuTests(unittest.TestCase):
+    def test_right_click_opens_copy_menu(self) -> None:
+        widget = _FakeTextWidget()
+        event = _FakeMouseEvent(x=8, y=12, x_root=100, y_root=200)
+
+        bind_readonly_text_context_menu(widget, language="ko")
+        with patch("ui.text_context_menu.tk.Menu", _FakeContextMenu):
+            result = widget.bindings["<Button-3>"](event)
+
+        self.assertEqual("break", result)
+        self.assertEqual(["<Button-3>", "<Control-Button-1>"], widget.bound_sequences)
+        self.assertEqual("2.4", widget.cursor_index)
+        self.assertEqual([("sel", "1.0", "end")], widget.removed_tags)
+        self.assertEqual(
+            ["복사", "모두 선택"],
+            widget._readonly_text_context_menu.command_labels,
+        )
+        self.assertEqual((100, 200), widget._readonly_text_context_menu.popup_position)
+        self.assertEqual(1, widget._readonly_text_context_menu.separator_calls)
+        self.assertEqual(1, widget._readonly_text_context_menu.grab_release_calls)
+
+        widget._readonly_text_context_menu.commands[0]()
+        widget._readonly_text_context_menu.commands[1]()
+
+        self.assertEqual(["<<Copy>>"], widget.generated_events)
+        self.assertEqual([("sel", "1.0", "end")], widget.added_tags)
+        self.assertEqual("1.0", widget.cursor_index)
+        self.assertEqual(["insert"], widget.seen_indexes)
 
 
 class _FakeMouseEvent:

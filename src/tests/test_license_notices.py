@@ -175,9 +175,10 @@ class LicenseNoticesLoadingTests(unittest.TestCase):
             "Microsoft Universal CRT",
             "Visual C++ Runtime",
             "app_icon.ico",
+            "app_icon.svg",
             "Google Fonts Icons",
             "Material Symbols",
-            "checklist",
+            "ECG waveform",
             "Apache-2.0",
             "APACHE-2.0.txt",
             "fonts.google.com/icons",
@@ -192,7 +193,8 @@ class LicenseNoticesLoadingTests(unittest.TestCase):
             "GPL-3.0-or-later",
             "LICENSE",
             "THIRD_PARTY_NOTICES.txt",
-            "Same-release source package",
+            "release source code",
+            "same-directory source ZIP",
         ):
             self.assertIn(expected_text, notice)
         self.assertNotIn("Version:", notice)

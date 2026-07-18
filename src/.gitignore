@@ -9,6 +9,7 @@ __pycache__/
 venv/
 env/
 ENV/
+site-packages/
 
 # Tool caches
 .ruff_cache/
@@ -16,6 +17,8 @@ ENV/
 .mypy_cache/
 .pyre/
 .hypothesis/
+.tox/
+.nox/
 
 # Build/distribution artifacts
 build/
@@ -56,5 +59,7 @@ Desktop.ini
 .xsession-errors*
 
 # Project local data
+.my/
 data/
 tmp_validation/
+tools/ui_smoke/artifacts/

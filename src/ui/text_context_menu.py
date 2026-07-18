@@ -1,4 +1,4 @@
-"""Context menu helpers for editable Tk text widgets."""
+"""Context menu helpers for Tk text widgets."""
 
 from __future__ import annotations
 
@@ -20,6 +20,26 @@ def bind_editable_text_context_menu(
 
     def show_menu(event: tk.Event[tk.Misc]) -> str:
         return _show_editable_text_context_menu(
+            event,
+            widget,
+            menu_parent=menu_parent,
+            language=language,
+        )
+
+    widget.bind("<Button-3>", show_menu, add="+")
+    widget.bind("<Control-Button-1>", show_menu, add="+")
+
+
+def bind_readonly_text_context_menu(
+    widget: tk.Text,
+    *,
+    menu_parent: tk.Misc | None = None,
+    language: LanguageResolver = None,
+) -> None:
+    """Bind the standard read-only context menu to a text widget."""
+
+    def show_menu(event: tk.Event[tk.Misc]) -> str:
+        return _show_readonly_text_context_menu(
             event,
             widget,
             menu_parent=menu_parent,
@@ -60,6 +80,35 @@ def _show_editable_text_context_menu(
         command=lambda target=widget: _select_all_text(target),
     )
     setattr(widget, "_editable_text_context_menu", menu)
+    try:
+        menu.tk_popup(event.x_root, event.y_root)
+    finally:
+        menu.grab_release()
+    return "break"
+
+
+def _show_readonly_text_context_menu(
+    event: tk.Event[tk.Misc],
+    widget: tk.Text,
+    *,
+    menu_parent: tk.Misc | None = None,
+    language: LanguageResolver = None,
+) -> str:
+    _place_cursor_for_context_menu(widget, event)
+
+    parent = menu_parent or widget
+    menu = tk.Menu(parent, tearoff=False)
+    active_language = _resolve_language(language)
+    menu.add_command(
+        label=ui_text("context_copy", active_language),
+        command=lambda target=widget: target.event_generate("<<Copy>>"),
+    )
+    menu.add_separator()
+    menu.add_command(
+        label=ui_text("context_select_all", active_language),
+        command=lambda target=widget: _select_all_text(target),
+    )
+    setattr(widget, "_readonly_text_context_menu", menu)
     try:
         menu.tk_popup(event.x_root, event.y_root)
     finally:

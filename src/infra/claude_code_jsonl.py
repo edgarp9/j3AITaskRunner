@@ -114,7 +114,7 @@ class ClaudeCodeJsonlParser:
             payload=payload,
             thread_id=thread_id,
             message=message,
-            raw_line=stripped,
+            raw_line=raw_line.rstrip("\r\n"),
         )
 
         self._total_events += 1

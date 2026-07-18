@@ -48,6 +48,7 @@ a = Analysis(
     datas=[
         (str(ROOT / "assets" / "app_icon.ico"), "assets"),
         (str(ROOT / "assets" / "app_icon.png"), "assets"),
+        (str(ROOT / "assets" / "app_icon.svg"), "assets"),
         (str(PROJECT_LICENSE_FILE), "."),
         (str(THIRD_PARTY_NOTICES_FILE), "."),
         (str(ABOUT_FILE), "."),

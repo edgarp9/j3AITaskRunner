@@ -22,6 +22,7 @@ from domain import (
     extract_candidates,
     extract_generated_work_prompts,
     render_work_prompt_template,
+    select_manual_work_candidates,
     select_work_candidates,
 )
 from infra.repository import PersistenceError
@@ -299,6 +300,64 @@ def prepare_preset_work_generation_prompt(
             issue=UseCaseIssue(
                 message="프리셋 분석 응답을 처리하지 못했습니다.",
                 operation="prepare_preset_work_generation_prompt",
+            )
+        )
+
+
+def prepare_manual_preset_work_generation_prompt(
+    *,
+    analysis_response_text: str,
+    work_prompt_template: str,
+    selected_candidate_ids: Sequence[str],
+) -> PresetWorkGenerationPromptResult:
+    """Build a work-generation prompt from user-selected candidate ids."""
+    try:
+        candidates = extract_candidates(analysis_response_text)
+        selected_candidates = select_manual_work_candidates(
+            candidates,
+            [str(candidate_id) for candidate_id in selected_candidate_ids],
+        )
+        if not selected_candidates:
+            return PresetWorkGenerationPromptResult()
+        return PresetWorkGenerationPromptResult(
+            selected_candidates=tuple(selected_candidates),
+            work_generation_prompt=render_work_prompt_template(
+                work_prompt_template,
+                selected_candidates,
+            ),
+        )
+    except PresetResponseContractError as exc:
+        LOGGER.exception(
+            "Manual preset analysis response violated the expected data contract. "
+            "response_text=%r selected_candidate_ids=%r",
+            analysis_response_text,
+            tuple(selected_candidate_ids),
+        )
+        return PresetWorkGenerationPromptResult(
+            issue=UseCaseIssue(
+                message=str(exc),
+                operation="prepare_manual_preset_work_generation_prompt",
+            )
+        )
+    except PresetAnalysisError as exc:
+        LOGGER.exception(
+            "Failed to parse manual preset analysis response. "
+            "response_text=%r selected_candidate_ids=%r",
+            analysis_response_text,
+            tuple(selected_candidate_ids),
+        )
+        return PresetWorkGenerationPromptResult(
+            issue=UseCaseIssue(
+                message=str(exc),
+                operation="prepare_manual_preset_work_generation_prompt",
+            )
+        )
+    except Exception:
+        LOGGER.exception("Unexpected error while preparing manual preset prompt.")
+        return PresetWorkGenerationPromptResult(
+            issue=UseCaseIssue(
+                message="프리셋 분석 응답을 처리하지 못했습니다.",
+                operation="prepare_manual_preset_work_generation_prompt",
             )
         )
 

@@ -1,0 +1,4 @@
+# Optional local development/release dependencies.
+# Source launch and unittest do not require installing this file.
+pyinstaller>=6
+tkinterdnd2

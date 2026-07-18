@@ -299,12 +299,12 @@ Distribution: Windows PyInstaller build-time dependency; not bundled unless a
   release redistributes the build environment
 License text or file location: pywin32_ctypes-0.2.3.dist-info/LICENSE.txt
 
-Component: assets/app_icon.ico and assets/app_icon.png
-Version: Derived from Google Material Symbols "checklist" glyph, codepoint e6b1
+Component: assets/app_icon.ico, assets/app_icon.png, and assets/app_icon.svg
+Version: Derived from a Google Material Symbols ECG waveform glyph source SVG
 License: Apache-2.0
 Copyright / Notice: Material Symbols / Material Icons by Google
 Source URL: https://fonts.google.com/icons
-Modified: Recolored and exported as project ICO/PNG icon assets
+Modified: Recolored and exported as project ICO/PNG/SVG icon assets
 Distribution: Bundled under assets/
 License text or file location: LICENSES/APACHE-2.0.txt / licenses/APACHE-2.0.txt
 
@@ -363,11 +363,11 @@ Apache-2.0-Licensed Components
 The following distributed runtime components are under Apache-2.0 or contain
 Apache-2.0-licensed material:
 
-Component: assets/app_icon.ico and assets/app_icon.png
-Version: Google Material Symbols "checklist" glyph, codepoint e6b1
+Component: assets/app_icon.ico, assets/app_icon.png, and assets/app_icon.svg
+Version: Google Material Symbols ECG waveform glyph source SVG
 Source: https://fonts.google.com/icons
 Distribution: Bundled icon resources
-Modified: Recolored and exported as project ICO/PNG icon assets
+Modified: Recolored and exported as project ICO/PNG/SVG icon assets
 Upstream NOTICE file: No NOTICE file present in the upstream
   google/material-design-icons repository at review time
 License text or file location: LICENSES/APACHE-2.0.txt / licenses/APACHE-2.0.txt
@@ -409,12 +409,13 @@ GPL-Compatible / Copyleft Components
 The following components require corresponding source or source instructions:
 
 Component: j3AITaskRunner project source
-Version: 0.3
+Version: 0.4
 License: GPL-3.0-or-later
-Source: Same-release source package j3AITaskRunner-0.3-source.zip
-Distribution: Source and binary release artifacts
+Source: Project repository/release source code for version 0.4
+Distribution: Binary release artifact; source is provided through the
+  repository/release source archive or another GPL-3.0-compliant source offer
 Modified: Project code
-Corresponding Source: j3AITaskRunner-0.3-source.zip
+Corresponding Source: Project repository/release source code for version 0.4
 
 Component: PyInstaller bootloader
 Version: 6.21.0
@@ -487,8 +488,7 @@ Sources Checked
 
 - Project build files: build_release.py and j3AITaskRunner.spec.
 - Current release artifacts:
-  dist/windows/j3AITaskRunner-0.3-source.zip
-  dist/windows/j3AITaskRunner-0.3-windows.zip
+  dist/windows/j3AITaskRunner-0.4-windows.zip
 - Common notice templates: ex_about.txt and ex_THIRD_PARTY_NOTICES.txt.
 - Current package metadata inspected with importlib.metadata from Python 3.14.4
   in the managed Windows build environment.

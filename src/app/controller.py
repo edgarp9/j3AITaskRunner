@@ -13,14 +13,16 @@ from domain import (
     AppSettings,
     Job,
     JobStatus,
+    QUEUE_MODE_SHARED,
     QueueStatus,
     QueueStopReason,
     SessionTab,
+    SessionTabKind,
     SessionTabId,
     WorkspaceTab,
 )
 from domain.models import utc_now
-from infra.process_runner import AgentRunStatus
+from infra.process_runner import AgentRunResult, AgentRunStatus
 
 from .execution_worker import (
     BackgroundExecutionRunner,
@@ -35,90 +37,28 @@ from .session_manager import CompletedSessionSummary, SessionManager
 from .use_cases import apply_execution_result, confirm_session_id_for_job
 from .workspace_manager import WorkspaceManager
 
+from .controller_history import AppControllerHistoryMixin
+from .controller_events import (
+    CompletedSessionUpdatedEvent,
+    JobExecutionResultCapturedEvent,
+    JobStatusChangedEvent,
+    LogAppendedEvent,
+    SessionCloseResult,
+    SessionIdConfirmedEvent,
+    WorkspaceCloseResult,
+)
+
 LOGGER = logging.getLogger(__name__)
 _ACTIVE_QUEUE_JOB_STATUSES = (
     JobStatus.QUEUED,
     JobStatus.WAITING_FOR_CONFIGURATION,
     JobStatus.RUNNING,
 )
-
-
-@dataclass(slots=True, frozen=True)
-class JobStatusChangedEvent:
-    """UI-safe event describing one job status transition."""
-
-    job_id: str
-    workspace_tab_id: str
-    session_tab_id: str
-    previous_status: JobStatus | None
-    current_status: JobStatus
-    configuration_wait_reason: str | None
-    user_message: str | None
-    occurred_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(slots=True, frozen=True)
-class SessionIdConfirmedEvent:
-    """UI-safe event describing a session id that became available."""
-
-    job_id: str
-    session_tab_id: str
-    session_id: str
-    occurred_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(slots=True, frozen=True)
-class LogAppendedEvent:
-    """UI-safe event describing one log line that can be appended later."""
-
-    job_id: str
-    workspace_tab_id: str
-    session_tab_id: str
-    stream_name: str
-    line: str
-    occurred_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(slots=True, frozen=True)
-class CompletedSessionUpdatedEvent:
-    """UI-safe event describing runtime completed-session data changes."""
-
-    job_id: str
-    summary: CompletedSessionSummary
-    occurred_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(slots=True, frozen=True)
-class JobExecutionResultCapturedEvent:
-    """UI-safe event with the final execution payload for app-level follow-ups."""
-
-    job_id: str
-    workspace_tab_id: str
-    session_tab_id: str
-    status: AgentRunStatus
-    last_message: str | None
-    occurred_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(slots=True, frozen=True)
-class SessionCloseResult:
-    """Outcome of closing one session tab."""
-
-    session_tab: SessionTab
-    canceled_job: Job | None = None
-    removed_queued_job_count: int = 0
-    queue_stopped: bool = False
-
-
-@dataclass(slots=True, frozen=True)
-class WorkspaceCloseResult:
-    """Outcome of closing one workspace tab."""
-
-    workspace_tab: WorkspaceTab
-    closed_sessions: tuple[SessionTab, ...]
-    canceled_job: Job | None = None
-    removed_queued_job_count: int = 0
-    queue_stopped: bool = False
+_IMMEDIATE_RUN_BLOCKING_JOB_STATUSES = (
+    JobStatus.QUEUED,
+    JobStatus.WAITING_FOR_CONFIGURATION,
+    JobStatus.RUNNING,
+)
 
 
 ControllerEvent = (
@@ -130,7 +70,7 @@ ControllerEvent = (
 )
 
 
-class AppController:
+class AppController(AppControllerHistoryMixin):
     """Coordinate scheduler actions and background execution events for the UI layer."""
 
     def __init__(
@@ -228,6 +168,22 @@ class AppController:
             dispatch_immediately=dispatch_immediately,
         )
 
+    def submit_immediate_job(
+        self,
+        session_tab_id: SessionTabId,
+        prompt: str,
+        *,
+        execution_options: AgentExecutionOptions | None = None,
+    ) -> Job:
+        """Register one normal-session job and start it outside the queue slot."""
+        return self._run_scheduler_action(
+            lambda: self._submit_immediate_job(
+                session_tab_id,
+                prompt,
+                execution_options=execution_options,
+            )
+        )
+
     def prioritize_queued_jobs(self, job_ids: Sequence[str]) -> tuple[Job, ...]:
         """Move selected queued jobs before other pending jobs in their workspaces."""
         return self._run_scheduler_action(
@@ -260,6 +216,10 @@ class AppController:
     def delete_job(self, job_id: str) -> Job:
         """Delete one non-running runtime job."""
         return self._run_scheduler_action(lambda: self.scheduler.delete_job(job_id))
+
+    def clear_all_jobs(self) -> int:
+        """Delete every non-running runtime job."""
+        return self._run_scheduler_action(self.scheduler.clear_all_jobs)
 
     def has_pending_dispatch(self) -> bool:
         """Return whether the scheduler deferred follow-up dispatch work."""
@@ -303,19 +263,31 @@ class AppController:
         queue_state = self.scheduler.get_queue_state(workspace_tab_id)
 
         if running_job is not None and running_job.session_tab_id == session_tab_id:
-            self.scheduler.stop_queue(
-                workspace_tab_id,
-                reason=QueueStopReason.RUNNING_TAB_CLOSED,
-            )
+            if queue_state.running_job_id == running_job.job_id:
+                self.scheduler.stop_queue(
+                    workspace_tab_id,
+                    reason=QueueStopReason.RUNNING_TAB_CLOSED,
+                )
+                queue_stopped = True
+            else:
+                self.scheduler.cancel_running_job(running_job.job_id)
             canceled_job = self.scheduler.get_job(running_job.job_id)
-            queue_stopped = True
 
         removed_jobs = self.scheduler.remove_queued_jobs_for_session(session_tab_id)
         if (
             not queue_stopped
             and removed_jobs
             and queue_state.status == QueueStatus.STARTED
-            and not self._workspace_has_active_queue_jobs(workspace_tab_id)
+            and (
+                (
+                    self._queue_mode_is_shared()
+                    and not self._has_active_queue_jobs()
+                )
+                or (
+                    not self._queue_mode_is_shared()
+                    and not self._workspace_has_active_queue_jobs(workspace_tab_id)
+                )
+            )
         ):
             self.scheduler.stop_queue(
                 workspace_tab_id,
@@ -335,25 +307,51 @@ class AppController:
     def close_workspace(self, workspace_tab_id: str) -> WorkspaceCloseResult:
         """Close one workspace tab, its open session tabs, and pending jobs."""
         before_jobs = self._snapshot_jobs()
-        running_job = self.scheduler.get_running_job(workspace_tab_id=workspace_tab_id)
+        running_jobs = tuple(
+            job
+            for job in self.scheduler.list_workspace_jobs(workspace_tab_id)
+            if job.status == JobStatus.RUNNING
+        )
+        running_queue_job = self.scheduler.get_running_job(workspace_tab_id=workspace_tab_id)
         canceled_job: Job | None = None
         queue_stopped = False
         queue_state = self.scheduler.get_queue_state(workspace_tab_id)
 
-        if queue_state.status == QueueStatus.STARTED or running_job is not None:
+        should_stop_queue = (
+            running_queue_job is not None
+            if self._queue_mode_is_shared()
+            else queue_state.status == QueueStatus.STARTED or running_queue_job is not None
+        )
+        if should_stop_queue:
             self.scheduler.stop_queue(
                 workspace_tab_id,
                 reason=(
                     QueueStopReason.RUNNING_TAB_CLOSED
-                    if running_job is not None
+                    if running_queue_job is not None
                     else QueueStopReason.USER_STOPPED
                 ),
             )
-            if running_job is not None:
-                canceled_job = self.scheduler.get_job(running_job.job_id)
             queue_stopped = True
+        running_queue_job_id = running_queue_job.job_id if running_queue_job is not None else None
+        for running_job in running_jobs:
+            if running_job.job_id != running_queue_job_id:
+                self.scheduler.cancel_running_job(running_job.job_id)
+            if canceled_job is None:
+                canceled_job = self.scheduler.get_job(running_job.job_id)
 
         removed_jobs = self.scheduler.remove_queued_jobs_for_workspace(workspace_tab_id)
+        if (
+            self._queue_mode_is_shared()
+            and not queue_stopped
+            and removed_jobs
+            and queue_state.status == QueueStatus.STARTED
+            and not self._has_active_queue_jobs()
+        ):
+            self.scheduler.stop_queue(
+                workspace_tab_id,
+                reason=QueueStopReason.USER_STOPPED,
+            )
+            queue_stopped = True
         closed_sessions = self.session_manager.close_sessions_for_workspace(workspace_tab_id)
         closed_workspace = self.workspace_manager.close_workspace(workspace_tab_id)
         self._emit_job_status_changes(before_jobs, self._snapshot_jobs())
@@ -459,6 +457,7 @@ class AppController:
             result=worker_event.result,
         )
         self._emit_job_status_changes(before_jobs, self._snapshot_jobs())
+        self._record_failed_session_turn_error(completion.job, worker_event.result)
 
         if completion.assigned_session_id is not None:
             self._publish_event(
@@ -508,6 +507,39 @@ class AppController:
         self._emit_job_status_changes(before_jobs, self._snapshot_jobs())
         return result
 
+    def _submit_immediate_job(
+        self,
+        session_tab_id: SessionTabId,
+        prompt: str,
+        *,
+        execution_options: AgentExecutionOptions | None,
+    ) -> Job:
+        self._ensure_session_can_run_immediately(session_tab_id)
+        return self.scheduler.register_and_start_immediate_job(
+            session_tab_id,
+            prompt,
+            execution_options=execution_options,
+        )
+
+    def _ensure_session_can_run_immediately(self, session_tab_id: SessionTabId) -> None:
+        session_tab = self.session_manager.get_session_tab(session_tab_id)
+        if session_tab.kind != SessionTabKind.NORMAL:
+            raise ValueError("Only normal sessions can run immediately.")
+
+        blocking_job = next(
+            (
+                job
+                for job in self.scheduler.list_session_jobs(session_tab_id)
+                if job.status in _IMMEDIATE_RUN_BLOCKING_JOB_STATUSES
+            ),
+            None,
+        )
+        if blocking_job is not None:
+            raise ValueError(
+                "Session has a queued, waiting, or running job: "
+                f"{session_tab_id}"
+            )
+
     def _snapshot_jobs(self) -> dict[str, Job]:
         return self.scheduler.snapshot_jobs_by_id()
 
@@ -522,6 +554,15 @@ class AppController:
             job.status in _ACTIVE_QUEUE_JOB_STATUSES
             for job in self.scheduler.list_workspace_jobs(workspace_tab_id)
         )
+
+    def _has_active_queue_jobs(self) -> bool:
+        return any(
+            job.status in _ACTIVE_QUEUE_JOB_STATUSES
+            for job in self.scheduler.list_jobs()
+        )
+
+    def _queue_mode_is_shared(self) -> bool:
+        return self.scheduler.queue_mode == QUEUE_MODE_SHARED
 
     def _emit_job_status_changes(
         self,
@@ -559,52 +600,6 @@ class AppController:
 
     def _publish_event(self, event: ControllerEvent) -> None:
         self._ui_event_queue.put(event)
-
-    def _sync_session_turn_for_status_change(
-        self,
-        previous_status: JobStatus | None,
-        job: Job,
-    ) -> None:
-        if job.status == JobStatus.RUNNING and previous_status != JobStatus.RUNNING:
-            self._record_started_turn(job)
-            return
-
-        if (
-            job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELED)
-            and previous_status == JobStatus.RUNNING
-        ):
-            self._finalize_session_turn(job)
-
-    def _record_started_turn(self, job: Job) -> None:
-        if job.started_at is None:
-            LOGGER.warning("Running job is missing started_at. job_id=%s", job.job_id)
-            return
-
-        try:
-            self.session_manager.record_started_turn(
-                job.session_tab_id,
-                job_id=job.job_id,
-                prompt_text=job.prompt,
-                started_at=job.started_at,
-                last_activity_at=job.started_at,
-            )
-        except Exception:
-            LOGGER.exception("Failed to record started session turn. job_id=%s", job.job_id)
-
-    def _finalize_session_turn(self, job: Job) -> None:
-        if job.completed_at is None:
-            LOGGER.warning("Finished job is missing completed_at. job_id=%s", job.job_id)
-            return
-
-        try:
-            self.session_manager.finalize_turn(
-                job.session_tab_id,
-                job_id=job.job_id,
-                completed_at=job.completed_at,
-                last_activity_at=job.completed_at,
-            )
-        except Exception:
-            LOGGER.exception("Failed to finalize session turn. job_id=%s", job.job_id)
 
 
 def _job_sort_key(job: Job) -> tuple[int, float, str]:

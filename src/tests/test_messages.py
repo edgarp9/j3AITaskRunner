@@ -17,7 +17,7 @@ class RuntimeStatusMessageTests(unittest.TestCase):
 
 
 class ProgressLogMessageTests(unittest.TestCase):
-    def test_progress_log_uses_concise_item_text_without_raw_jsonl_payload(self) -> None:
+    def test_progress_log_uses_raw_jsonl_line_when_available(self) -> None:
         raw_line = (
             '{"type":"item.completed",'
             '"item":{"id":"item_1","type":"agent_message","text":"전체 진행 메시지"}}\n'
@@ -31,11 +31,10 @@ class ProgressLogMessageTests(unittest.TestCase):
         )
 
         formatted = format_progress_event(event)
-        self.assertEqual("item.completed: 전체 진행 메시지", formatted)
-        self.assertNotIn('"text":"전체 진행 메시지"', formatted)
-        self.assertNotIn(raw_line.strip(), formatted)
+        self.assertEqual(raw_line.rstrip("\r\n"), formatted)
+        self.assertIn('"text":"전체 진행 메시지"', formatted)
 
-    def test_progress_log_keeps_command_event_short_when_raw_line_is_unavailable(self) -> None:
+    def test_progress_log_serializes_full_payload_when_raw_line_is_unavailable(self) -> None:
         event = AgentStreamEvent(
             line_number=3,
             event_type="item.completed",
@@ -51,20 +50,24 @@ class ProgressLogMessageTests(unittest.TestCase):
 
         formatted = format_progress_event(event)
 
-        self.assertEqual("item.completed: command_execution: python -m compileall .", formatted)
-        self.assertNotIn("aggregated_output", formatted)
+        self.assertEqual(json.dumps(event.payload, ensure_ascii=False), formatted)
+        self.assertIn("aggregated_output", formatted)
+        self.assertIn("Compiling files\\nDone\\n", formatted)
 
-    def test_progress_log_keeps_known_lifecycle_events_one_line(self) -> None:
+    def test_progress_log_does_not_truncate_long_raw_line(self) -> None:
+        long_text = "x" * 240
+        raw_line = json.dumps({"type": "progress", "text": long_text}, ensure_ascii=False)
         event = AgentStreamEvent(
             line_number=1,
-            event_type="thread.started",
-            payload={"type": "thread.started", "thread_id": "thread-1"},
-            thread_id="thread-1",
+            event_type="progress",
+            payload=json.loads(raw_line),
+            raw_line=raw_line,
         )
 
         formatted = format_progress_event(event)
 
-        self.assertEqual("세션 시작: thread-1", formatted)
+        self.assertEqual(raw_line, formatted)
+        self.assertIn(long_text, formatted)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,8 @@ Source Code
 -----------
 
 Corresponding Source for this binary release:
-Same-release source package distributed next to the binary package.
+Project release source code at the repository/release location below.
+The release build does not create a same-directory source ZIP.
 
 Source repository / release location:
 https://github.com/edgarp9

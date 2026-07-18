@@ -26,6 +26,8 @@ from infra.process_runner import (
     ExecutionArtifactPaths,
 )
 
+from tests._controller_helpers import *
+
 
 class AppControllerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -119,7 +121,8 @@ class AppControllerTests(unittest.TestCase):
             any(
                 isinstance(event, LogAppendedEvent)
                 and event.stream_name == "progress"
-                and "세션 시작" in event.line
+                and "thread.started" in event.line
+                and "thread-success" in event.line
                 for event in events
             )
         )
@@ -127,7 +130,7 @@ class AppControllerTests(unittest.TestCase):
             any(
                 isinstance(event, LogAppendedEvent)
                 and event.stream_name == "progress"
-                and "응답 완료" in event.line
+                and "turn.completed" in event.line
                 for event in events
             )
         )
@@ -325,7 +328,50 @@ class AppControllerTests(unittest.TestCase):
         turns = self.controller.session_manager.list_session_tab_turns(self.session_a.session_tab_id)
         self.assertEqual(1, len(turns))
         self.assertIsNone(turns[0].response_text)
+        self.assertEqual("tool execution failed", turns[0].error_text)
         self.assertIsNotNone(turns[0].completed_at)
+
+    def test_failed_execution_records_nested_error_event_in_session_history(self) -> None:
+        error_message = json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": (
+                        "The following tools cannot be used with reasoning.effort "
+                        "'minimal': web_search."
+                    ),
+                    "param": "tools",
+                },
+                "status": 400,
+            },
+            indent=2,
+        )
+        self.runner.prepare(
+            "provider error",
+            _Scenario(
+                status=AgentRunStatus.FAILED,
+                session_id="thread-error",
+                failure_reason=error_message,
+                stdout_lines=(
+                    '{"type":"error","message":"request failed"}\n',
+                    '{"type":"turn.failed","error":{"message":"request failed"}}\n',
+                ),
+                exit_code=1,
+            ),
+        )
+        job = self.controller.submit_job(self.session_a.session_tab_id, "provider error")
+        self.controller.start_queue()
+
+        self.runner.resolve(job.job_id)
+        self._process_background_until(job.job_id, JobStatus.FAILED)
+
+        turns = self.controller.session_manager.list_session_tab_turns(
+            self.session_a.session_tab_id
+        )
+        self.assertEqual(1, len(turns))
+        self.assertIsNone(turns[0].response_text)
+        self.assertEqual(error_message, turns[0].error_text)
 
     def test_execution_timeout_fails_job_and_dispatches_next_queued_job(self) -> None:
         self.runner.prepare(
@@ -537,263 +583,6 @@ class AppControllerTests(unittest.TestCase):
         self.controller.stop_queue(self.workspace_tab.workspace_tab_id)
         self._process_background_until(first_job.job_id, JobStatus.CANCELED)
 
-    def test_close_session_completed_result_after_cancel_is_recorded_as_canceled(self) -> None:
-        self.runner.prepare(
-            "close completed race",
-            _Scenario(
-                status=AgentRunStatus.COMPLETED,
-                session_id="thread-closed-race",
-                last_message="Completed after tab close",
-                cancel_ignored=True,
-            ),
-        )
-        job = self.controller.submit_job(self.session_a.session_tab_id, "close completed race")
-        self.controller.start_queue()
-        self.controller.close_session(self.session_a.session_tab_id)
-        self.controller.drain_ui_events()
-
-        self.runner.resolve(job.job_id)
-        self._process_background_until(job.job_id, JobStatus.CANCELED)
-        events = self.controller.drain_ui_events()
-
-        canceled_job = self.controller.scheduler.get_job(job.job_id)
-        self.assertEqual(JobStatus.CANCELED, canceled_job.status)
-        self.assertEqual("탭 닫기로 취소했습니다.", canceled_job.user_message)
-        self.assertEqual(
-            (),
-            self.controller.session_manager.list_completed_sessions(str(self.workspace_path)),
-        )
-        self.assertFalse(any(isinstance(event, CompletedSessionUpdatedEvent) for event in events))
-
-    def test_close_session_removes_waiting_for_configuration_job(self) -> None:
-        self.settings = AppSettings(
-            executable_path=str(self.root_path / "missing-agent.exe"),
-        )
-        job = self.controller.submit_job(self.session_a.session_tab_id, "close waiting job")
-        self.controller.start_queue(self.workspace_tab.workspace_tab_id)
-        self.assertEqual(
-            JobStatus.WAITING_FOR_CONFIGURATION,
-            self.controller.scheduler.get_job(job.job_id).status,
-        )
-
-        result = self.controller.close_session(self.session_a.session_tab_id)
-
-        self.assertEqual(TabOpenState.CLOSED, result.session_tab.open_state)
-        self.assertEqual(1, result.removed_queued_job_count)
-        self.assertTrue(result.queue_stopped)
-        queue_state = self.controller.scheduler.get_queue_state(self.workspace_tab.workspace_tab_id)
-        self.assertEqual(QueueStatus.STOPPED, queue_state.status)
-        self.assertEqual(QueueStopReason.USER_STOPPED, queue_state.last_stop_reason)
-        with self.assertRaises(KeyError):
-            self.controller.scheduler.get_job(job.job_id)
-
-    def test_close_workspace_removes_pending_jobs_for_closed_sessions(self) -> None:
-        other_workspace_path = self.root_path / "workspace-b"
-        other_workspace_path.mkdir()
-        other_workspace = self.controller.open_workspace(str(other_workspace_path)).workspace_tab
-        other_session = self.controller.open_session(other_workspace.workspace_tab_id)
-
-        self.settings = AppSettings(
-            executable_path=str(self.root_path / "missing-agent.exe"),
-        )
-        first_job = self.controller.submit_job(self.session_a.session_tab_id, "workspace-a first")
-        self.controller.start_queue(self.workspace_tab.workspace_tab_id)
-        self.assertEqual(
-            JobStatus.WAITING_FOR_CONFIGURATION,
-            self.controller.scheduler.get_job(first_job.job_id).status,
-        )
-        self.controller.stop_queue(self.workspace_tab.workspace_tab_id)
-
-        self.settings = AppSettings(
-            executable_path=str(self.executable_path),
-        )
-        second_job = self.controller.submit_job(self.session_b.session_tab_id, "workspace-a second")
-        other_workspace_job = self.controller.submit_job(
-            other_session.session_tab_id,
-            "workspace-b queued",
-        )
-        self.assertEqual(JobStatus.QUEUED, self.controller.scheduler.get_job(second_job.job_id).status)
-
-        result = self.controller.close_workspace(self.workspace_tab.workspace_tab_id)
-
-        self.assertEqual(TabOpenState.CLOSED, result.workspace_tab.open_state)
-        self.assertEqual(
-            (self.session_a.session_tab_id, self.session_b.session_tab_id),
-            tuple(session.session_tab_id for session in result.closed_sessions),
-        )
-        self.assertEqual(2, result.removed_queued_job_count)
-        self.assertEqual(
-            {other_workspace_job.job_id},
-            {job.job_id for job in self.controller.scheduler.list_jobs()},
-        )
-        self.assertEqual(
-            JobStatus.QUEUED,
-            self.controller.scheduler.get_job(other_workspace_job.job_id).status,
-        )
-
-    def test_retry_waiting_jobs_skips_closed_workspace_jobs(self) -> None:
-        self.settings = AppSettings(
-            executable_path=str(self.root_path / "missing-agent.exe"),
-        )
-        job = self.controller.submit_job(self.session_a.session_tab_id, "retry me later")
-        self.controller.start_queue(self.workspace_tab.workspace_tab_id)
-        self.assertEqual(
-            JobStatus.WAITING_FOR_CONFIGURATION,
-            self.controller.scheduler.get_job(job.job_id).status,
-        )
-
-        runtime = AppRuntime.__new__(AppRuntime)
-        runtime._controller = self.controller
-
-        self.controller.workspace_manager.close_workspace(self.workspace_tab.workspace_tab_id)
-
-        retried_job_ids = runtime.retry_waiting_jobs(sync_events=False)
-
-        self.assertEqual((), retried_job_ids)
-        self.assertEqual(
-            JobStatus.WAITING_FOR_CONFIGURATION,
-            self.controller.scheduler.get_job(job.job_id).status,
-        )
-
-    def test_close_workspace_reissues_cancel_for_running_job_after_queue_already_stopped(self) -> None:
-        self.runner.prepare("workspace-stop-race", _Scenario(status=AgentRunStatus.COMPLETED))
-        job = self.controller.submit_job(self.session_a.session_tab_id, "workspace-stop-race")
-        self.controller.start_queue()
-        self.controller.drain_ui_events()
-
-        stopped_state = self.controller.stop_queue(self.workspace_tab.workspace_tab_id)
-
-        self.assertEqual(QueueStatus.STOPPED, stopped_state.status)
-        self.assertEqual(JobStatus.RUNNING, self.controller.scheduler.get_job(job.job_id).status)
-
-        result = self.controller.close_workspace(self.workspace_tab.workspace_tab_id)
-
-        self.assertTrue(result.queue_stopped)
-        self.assertEqual(job.job_id, result.canceled_job.job_id if result.canceled_job else None)
-        self.assertEqual(TabOpenState.CLOSED, result.workspace_tab.open_state)
-        self.assertEqual(
-            QueueStopReason.RUNNING_TAB_CLOSED,
-            self.controller.scheduler.get_queue_state(self.workspace_tab.workspace_tab_id).last_stop_reason,
-        )
-
-        self._process_background_until(job.job_id, JobStatus.CANCELED)
-
-        canceled_job = self.controller.scheduler.get_job(job.job_id)
-        self.assertEqual(JobStatus.CANCELED, canceled_job.status)
-        self.assertEqual("탭 닫기로 취소했습니다.", canceled_job.user_message)
-
-    def test_stopping_one_workspace_queue_keeps_other_workspace_running(self) -> None:
-        other_workspace_path = self.root_path / "workspace-b"
-        other_workspace_path.mkdir()
-        other_workspace = self.controller.open_workspace(str(other_workspace_path)).workspace_tab
-        other_session = self.controller.open_session(other_workspace.workspace_tab_id)
-
-        self.runner.prepare("workspace-a", _Scenario(status=AgentRunStatus.COMPLETED))
-        self.runner.prepare("workspace-b", _Scenario(status=AgentRunStatus.COMPLETED))
-
-        first_job = self.controller.submit_job(self.session_a.session_tab_id, "workspace-a")
-        second_job = self.controller.submit_job(other_session.session_tab_id, "workspace-b")
-
-        self.controller.start_queue(self.workspace_tab.workspace_tab_id)
-        self.controller.start_queue(other_workspace.workspace_tab_id)
-        self.runner.wait_until_launched(second_job.job_id)
-        self.controller.stop_queue(self.workspace_tab.workspace_tab_id)
-
-        self.assertEqual(JobStatus.RUNNING, self.controller.scheduler.get_job(first_job.job_id).status)
-        self.assertEqual(JobStatus.RUNNING, self.controller.scheduler.get_job(second_job.job_id).status)
-        self.assertEqual(
-            QueueStatus.STOPPED,
-            self.controller.scheduler.get_queue_state(self.workspace_tab.workspace_tab_id).status,
-        )
-        self.assertEqual(
-            QueueStatus.STARTED,
-            self.controller.scheduler.get_queue_state(other_workspace.workspace_tab_id).status,
-        )
-
-        self._process_background_until(first_job.job_id, JobStatus.CANCELED)
-
-        self.assertEqual(JobStatus.CANCELED, self.controller.scheduler.get_job(first_job.job_id).status)
-        self.assertEqual(JobStatus.RUNNING, self.controller.scheduler.get_job(second_job.job_id).status)
-        self.assertEqual(
-            ("workspace-a", "workspace-b"),
-            tuple(request.prompt for request in self.runner.launched_requests[:2]),
-        )
-
-    def test_global_oldest_runs_before_same_session_follow_up_after_completion(self) -> None:
-        self.runner.prepare(
-            "session-a first",
-            _Scenario(
-                status=AgentRunStatus.COMPLETED,
-                session_id="thread-a",
-                last_message="done",
-            ),
-        )
-        self.runner.prepare("session-b waiting", _Scenario(status=AgentRunStatus.COMPLETED))
-        self.runner.prepare("session-a second", _Scenario(status=AgentRunStatus.COMPLETED))
-
-        first_job = self.controller.submit_job(self.session_a.session_tab_id, "session-a first")
-        other_session_job = self.controller.submit_job(self.session_b.session_tab_id, "session-b waiting")
-        follow_up_job = self.controller.submit_job(self.session_a.session_tab_id, "session-a second")
-        self.controller.start_queue()
-        self.controller.drain_ui_events()
-
-        self.runner.resolve(first_job.job_id)
-        self._process_background_until(other_session_job.job_id, JobStatus.RUNNING)
-        self.runner.wait_until_launched(other_session_job.job_id)
-
-        self.assertEqual(JobStatus.COMPLETED, self.controller.scheduler.get_job(first_job.job_id).status)
-        self.assertEqual(JobStatus.QUEUED, self.controller.scheduler.get_job(follow_up_job.job_id).status)
-        self.assertEqual(JobStatus.RUNNING, self.controller.scheduler.get_job(other_session_job.job_id).status)
-        self.assertEqual(
-            ("session-a first", "session-b waiting"),
-            tuple(request.prompt for request in self.runner.launched_requests[:2]),
-        )
-
-    def test_process_background_events_max_items_keeps_worker_event_order(self) -> None:
-        self.runner.prepare(
-            "bounded",
-            _Scenario(
-                status=AgentRunStatus.COMPLETED,
-                session_id="thread-bounded",
-                last_message="done",
-            ),
-        )
-        job = self.controller.submit_job(self.session_a.session_tab_id, "bounded")
-        self.controller.start_queue()
-        self.controller.drain_ui_events()
-
-        self.runner.resolve(job.job_id)
-
-        self.assertEqual(1, self.controller.process_background_events(max_items=1))
-        first_events = self.controller.drain_ui_events()
-        self.assertEqual(1, len(first_events))
-        self.assertIsInstance(first_events[0], LogAppendedEvent)
-        self.assertIn("세션 시작", first_events[0].line)
-        self.assertEqual(JobStatus.RUNNING, self.controller.scheduler.get_job(job.job_id).status)
-
-        self.assertEqual(1, self.controller.process_background_events(max_items=1))
-        second_events = self.controller.drain_ui_events()
-        self.assertEqual(1, len(second_events))
-        self.assertIsInstance(second_events[0], SessionIdConfirmedEvent)
-        self.assertEqual(JobStatus.RUNNING, self.controller.scheduler.get_job(job.job_id).status)
-
-        processed = 0
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and processed == 0:
-            processed = self.controller.process_background_events(max_items=1)
-            if processed == 0:
-                time.sleep(0.01)
-        self.assertEqual(1, processed)
-        completion_events = self.controller.drain_ui_events()
-        self.assertTrue(
-            any(
-                isinstance(event, JobStatusChangedEvent)
-                and event.current_status == JobStatus.COMPLETED
-                for event in completion_events
-            )
-        )
-        self.assertEqual(JobStatus.COMPLETED, self.controller.scheduler.get_job(job.job_id).status)
-
     def _process_background_until(self, job_id: str, status: JobStatus) -> None:
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
@@ -804,157 +593,21 @@ class AppControllerTests(unittest.TestCase):
         self.fail(f"Timed out waiting for job {job_id} to reach status {status}.")
 
 
-@dataclass(slots=True, frozen=True)
-class _Scenario:
-    status: AgentRunStatus
-    session_id: str | None = None
-    last_message: str | None = None
-    stdout_lines: tuple[str, ...] = ()
-    stderr_lines: tuple[str, ...] = ()
-    failure_reason: str | None = None
-    exit_code: int | None = 0
-    cancel_ignored: bool = False
 
 
-class _FakeRunningHandle:
-    def __init__(
-        self,
-        *,
-        job_id: str,
-        artifacts_root: Path,
-        scenario: _Scenario,
-        on_stdout_line,
-        on_stderr_line,
-        on_json_event,
-    ) -> None:
-        self.handle_id = job_id
-        self._artifacts_root = artifacts_root
-        self._scenario = scenario
-        self._on_stdout_line = on_stdout_line
-        self._on_stderr_line = on_stderr_line
-        self._on_json_event = on_json_event
-        self._result_ready = threading.Event()
-        self._result: AgentRunResult | None = None
-
-    def wait(self, timeout: float | None = None) -> AgentRunResult:
-        if not self._result_ready.wait(timeout):
-            raise TimeoutError(f"Result not ready for {self.handle_id}")
-        assert self._result is not None
-        return self._result
-
-    def resolve(self) -> None:
-        if self._result_ready.is_set():
-            return
-
-        if self._scenario.session_id and self._on_json_event is not None:
-            self._on_json_event(
-                AgentStreamEvent(
-                    line_number=1,
-                    event_type="thread.started",
-                    payload={"type": "thread.started", "thread_id": self._scenario.session_id},
-                    thread_id=self._scenario.session_id,
-                )
-            )
-        if self._on_json_event is not None and self._scenario.stdout_lines:
-            for line_number, line in enumerate(self._scenario.stdout_lines, start=2):
-                event = _agent_stream_event_from_json_line(line, line_number=line_number)
-                if event is not None:
-                    self._on_json_event(event)
-        if self._on_stderr_line is not None:
-            for line in self._scenario.stderr_lines:
-                self._on_stderr_line(line)
-
-        artifacts = _create_artifacts(self._artifacts_root, self.handle_id)
-        if self._scenario.last_message is not None:
-            artifacts.last_message_path.write_text(self._scenario.last_message, encoding="utf-8")
-
-        self._result = AgentRunResult(
-            status=self._scenario.status,
-            command=("fake-agent", self.handle_id),
-            artifacts=artifacts,
-            exit_code=self._scenario.exit_code,
-            session_id=self._scenario.session_id,
-            last_message=self._scenario.last_message,
-            failure_reason=self._scenario.failure_reason,
-        )
-        self._result_ready.set()
-
-    def cancel(self) -> None:
-        if self._result_ready.is_set():
-            return
-
-        if self._scenario.cancel_ignored:
-            return
-
-        self._scenario = _Scenario(
-            status=AgentRunStatus.CANCELED,
-            session_id=self._scenario.session_id,
-            exit_code=-15,
-            cancel_ignored=self._scenario.cancel_ignored,
-        )
-        self.resolve()
 
 
-class _FakeBackgroundRunner:
-    def __init__(self, artifacts_root: Path) -> None:
-        self._artifacts_root = artifacts_root
-        self._prepared_scenarios: dict[str, _Scenario] = {}
-        self._handles: dict[str, _FakeRunningHandle] = {}
-        self._handle_ready: dict[str, threading.Event] = {}
-        self.launched_requests: list[JobExecutionRequest] = []
 
-    def prepare(self, prompt: str, scenario: _Scenario) -> None:
-        self._prepared_scenarios[prompt] = scenario
 
-    def validate(self, request: JobExecutionRequest) -> str | None:
-        executable_path = Path(request.operational_settings.executable_path or "")
-        if not request.operational_settings.executable_path or not executable_path.is_file():
-            return "실행기 경로를 확인하세요."
 
-        workspace_path = Path(request.workspace_path)
-        if not workspace_path.is_dir():
-            return "워크스페이스 경로를 확인하세요."
 
-        return None
 
-    def launch(
-        self,
-        request: JobExecutionRequest,
-        *,
-        on_stdout_line=None,
-        on_stderr_line=None,
-        on_json_event=None,
-        on_handle_created=None,
-    ) -> _FakeRunningHandle:
-        scenario = self._prepared_scenarios.get(
-            request.prompt,
-            _Scenario(status=AgentRunStatus.COMPLETED),
-        )
-        handle = _FakeRunningHandle(
-            job_id=request.job_id,
-            artifacts_root=self._artifacts_root,
-            scenario=scenario,
-            on_stdout_line=on_stdout_line,
-            on_stderr_line=on_stderr_line,
-            on_json_event=on_json_event,
-        )
-        self._handles[request.job_id] = handle
-        self._handle_ready.setdefault(request.job_id, threading.Event()).set()
-        self.launched_requests.append(request)
-        if on_handle_created is not None:
-            on_handle_created(handle)
-        return handle
 
-    def cancel(self, handle: _FakeRunningHandle) -> None:
-        handle.cancel()
 
-    def resolve(self, job_id: str) -> None:
-        self.wait_until_launched(job_id)
-        self._handles[job_id].resolve()
 
-    def wait_until_launched(self, job_id: str, timeout: float = 1.0) -> None:
-        if not self._handle_ready.setdefault(job_id, threading.Event()).wait(timeout):
-            raise AssertionError(f"Timed out waiting for job {job_id} launch.")
+
+
+
 
 
 def _create_artifacts(root: Path, job_id: str) -> ExecutionArtifactPaths:

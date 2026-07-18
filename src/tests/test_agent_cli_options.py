@@ -46,11 +46,20 @@ class AgentCliOptionCatalogTests(unittest.TestCase):
     def test_codex_model_options_include_auto_and_known_models(self) -> None:
         options = build_model_select_options("")
 
+        self.assertEqual(
+            [
+                "",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.3-codex-spark",
+            ],
+            [option.value for option in options],
+        )
         self.assertEqual("자동", options[0].label)
-        self.assertEqual("", options[0].value)
-        self.assertIn("gpt-5.5", [option.value for option in options])
-        self.assertIn("gpt-5.4", [option.value for option in options])
-        self.assertIn("gpt-5-codex", [option.value for option in options])
 
     def test_model_options_keep_legacy_value_without_duplication(self) -> None:
         options = build_model_select_options("legacy-model")
@@ -59,6 +68,23 @@ class AgentCliOptionCatalogTests(unittest.TestCase):
 
         self.assertEqual(1, len(legacy_options))
         self.assertEqual("legacy-model (저장값)", legacy_options[0].label)
+
+    def test_codex_model_options_do_not_keep_removed_saved_values(self) -> None:
+        options = build_model_select_options("gpt-5")
+
+        self.assertEqual(
+            [
+                "",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.3-codex-spark",
+            ],
+            [option.value for option in options],
+        )
 
     def test_non_default_provider_model_options_keep_only_auto_and_saved_value(self) -> None:
         options = build_model_select_options(
@@ -82,8 +108,36 @@ class AgentCliOptionCatalogTests(unittest.TestCase):
             [option.value for option in options],
         )
 
+    def test_codex_model_options_drop_invalid_generic_gpt56_saved_value(self) -> None:
+        options = build_model_select_options("gpt-5.6")
+
+        self.assertNotIn("gpt-5.6", [option.value for option in options])
+
+    def test_codex_gpt56_sol_and_terra_reasoning_options_include_ultra(self) -> None:
+        for model in ("gpt-5.6-sol", "gpt-5.6-terra"):
+            with self.subTest(model=model):
+                options = build_reasoning_select_options("ultra", model=model)
+
+                self.assertEqual(
+                    ["", "low", "medium", "high", "xhigh", "max", "ultra"],
+                    [option.value for option in options],
+                )
+
+    def test_codex_gpt56_luna_reasoning_options_exclude_ultra(self) -> None:
+        options = build_reasoning_select_options("max", model="gpt-5.6-luna")
+
+        self.assertEqual(
+            ["", "low", "medium", "high", "xhigh", "max"],
+            [option.value for option in options],
+        )
+
     def test_codex_reasoning_options_follow_model_family_matrix(self) -> None:
-        supported_reasoning_models = ("", "gpt-5-codex", "gpt-5-mini", "o4-mini")
+        supported_reasoning_models = (
+            "",
+            "gpt-5.5",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex-spark",
+        )
 
         for model in supported_reasoning_models:
             with self.subTest(model=model):

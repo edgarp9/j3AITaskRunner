@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Sequence
 import importlib.metadata
 import importlib.util
@@ -18,6 +19,13 @@ import zipfile
 
 from app.version import APP_NAME, APP_VERSION
 
+from tools.release_version_info import (
+    _format_version_info_file,
+    _windows_version_tuple,
+    version_info_file_path,
+    write_version_info_file,
+)
+
 LIB_DIR_NAME = "lib"
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -32,6 +40,7 @@ ICON_FILE = ASSETS_DIR / "app_icon.ico"
 BUNDLED_ASSET_FILES = (
     ASSETS_DIR / "app_icon.ico",
     ASSETS_DIR / "app_icon.png",
+    ASSETS_DIR / "app_icon.svg",
 )
 LICENSES_DESTINATION = "licenses"
 STATIC_LICENSE_FILES = (LICENSES_DIR / "APACHE-2.0.txt",)
@@ -45,60 +54,7 @@ PACKAGE_LICENSE_COPY_NAMES = tuple(
     copy_name for _package_name, _license_name, copy_name in PACKAGE_LICENSE_COPY_TARGETS
 )
 OPTIONAL_COLLECT_ALL_MODULES = ("tkinterdnd2",)
-SOURCE_PACKAGE_NAME = f"{APP_NAME}-{APP_VERSION}-source.zip"
-SOURCE_PACKAGE_ROOT_NAME = f"{APP_NAME}-{APP_VERSION}-source"
-
-SOURCE_PACKAGE_EXCLUDED_DIR_NAMES = frozenset(
-    {
-        ".build-venv",
-        ".eggs",
-        ".git",
-        ".hypothesis",
-        ".idea",
-        ".j3aitaskrunner",
-        ".my",
-        ".mypy_cache",
-        ".nox",
-        ".pyre",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".tox",
-        ".venv",
-        ".vscode",
-        "__pycache__",
-        "build",
-        "data",
-        "dist",
-        "env",
-        "ENV",
-        "htmlcov",
-        "lib",
-        "log",
-        "pip-wheel-metadata",
-        "site-packages",
-        "tmp_validation",
-        "venv",
-    }
-)
-SOURCE_PACKAGE_EXCLUDED_FILE_NAMES = frozenset(
-    {
-        ".coverage",
-        ".DS_Store",
-        ".directory",
-        "Desktop.ini",
-        "Thumbs.db",
-    }
-)
-SOURCE_PACKAGE_EXCLUDED_SUFFIXES = (
-    ".bak",
-    ".log",
-    ".pyd",
-    ".pyc",
-    ".pyo",
-    ".swp",
-    ".swo",
-    ".tmp",
-)
+SOURCE_PACKAGE_GLOB = f"{APP_NAME}-*-source.zip"
 
 DIST_ROOT = PROJECT_ROOT / "dist"
 BUILD_ROOT = PROJECT_ROOT / "build"
@@ -447,6 +403,16 @@ def binary_package_name(current_platform: str) -> str:
     return f"{APP_NAME}-{APP_VERSION}-{current_platform}.zip"
 
 
+def source_package_name() -> str:
+    """Return the source release zip filename."""
+    return f"{APP_NAME}-{APP_VERSION}-source.zip"
+
+
+def source_package_root_name() -> str:
+    """Return the top-level directory name inside the source release zip."""
+    return f"{APP_NAME}-{APP_VERSION}-source"
+
+
 def remove_existing_file(path: Path) -> None:
     """Remove one existing file artifact."""
     if not path.exists():
@@ -456,66 +422,43 @@ def remove_existing_file(path: Path) -> None:
     path.unlink()
 
 
-def _is_source_package_file_excluded(path: Path) -> bool:
-    relative_path = path.relative_to(PROJECT_ROOT)
-    for part in relative_path.parts:
-        if _is_source_package_dir_name_excluded(part):
-            return True
+def remove_existing_source_packages(platform_dist_dir: Path) -> tuple[Path, ...]:
+    """Remove obsolete source ZIP artifacts from one platform dist directory."""
+    if not platform_dist_dir.exists():
+        return ()
 
-    file_name = relative_path.name
-    if file_name in SOURCE_PACKAGE_EXCLUDED_FILE_NAMES:
-        return True
-    if file_name.endswith("~"):
-        return True
-    if file_name.startswith((".coverage.", ".fuse_hidden", ".nfs", ".xsession-errors")):
-        return True
-    return file_name.endswith(SOURCE_PACKAGE_EXCLUDED_SUFFIXES)
-
-
-def _is_source_package_dir_name_excluded(name: str) -> bool:
-    return (
-        name in SOURCE_PACKAGE_EXCLUDED_DIR_NAMES
-        or name.endswith(".egg-info")
-        or name.startswith(".Trash-")
-    )
-
-
-def source_package_files() -> tuple[Path, ...]:
-    """Return project files to include in the source release package."""
-    source_files: list[Path] = []
-    for current_root, dir_names, file_names in os.walk(PROJECT_ROOT):
-        dir_names[:] = [
-            name for name in dir_names if not _is_source_package_dir_name_excluded(name)
-        ]
-        current_path = Path(current_root)
-        for file_name in file_names:
-            path = current_path / file_name
-            if not _is_source_package_file_excluded(path):
-                source_files.append(path)
-    return tuple(sorted(source_files))
+    removed_paths: list[Path] = []
+    for source_package in sorted(platform_dist_dir.glob(SOURCE_PACKAGE_GLOB)):
+        remove_existing_file(source_package)
+        removed_paths.append(source_package)
+    return tuple(removed_paths)
 
 
 def package_source_release(platform_dist_dir: Path) -> Path:
-    """Create the same-version source zip required for binary distribution."""
+    """Create a source release zip from the git HEAD tree."""
+    git = shutil.which("git")
+    if git is None:
+        raise BuildError("git was not found in PATH.")
+
     platform_dist_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = platform_dist_dir / SOURCE_PACKAGE_NAME
+    zip_path = platform_dist_dir / source_package_name()
     remove_existing_file(zip_path)
 
-    source_files = source_package_files()
-    required_files = (PROJECT_LICENSE_FILE, THIRD_PARTY_NOTICES_FILE, ABOUT_FILE)
-    missing_required_files = [path for path in required_files if path not in source_files]
-    if missing_required_files:
-        formatted = "\n".join(f"  - {path}" for path in missing_required_files)
-        raise BuildError(f"Source package is missing required notice file(s):\n{formatted}")
+    archive_root = source_package_root_name()
+    command = [
+        git,
+        "archive",
+        "--format=zip",
+        f"--prefix={archive_root}/",
+        "--output",
+        str(zip_path),
+        "HEAD",
+    ]
+    result = subprocess.run(command, cwd=PROJECT_ROOT, check=False)
+    if result.returncode != 0:
+        raise BuildError(f"git archive failed with exit code {result.returncode}.")
 
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for source_file in source_files:
-            archive_name = Path(SOURCE_PACKAGE_ROOT_NAME) / source_file.relative_to(
-                PROJECT_ROOT
-            )
-            archive.write(source_file, archive_name.as_posix())
-
-    validate_source_package(zip_path)
+    validate_source_package(zip_path, archive_root)
     return zip_path
 
 
@@ -538,12 +481,12 @@ def package_binary_release(
     return zip_path
 
 
-def validate_source_package(zip_path: Path) -> None:
-    """Validate that a source zip contains mandatory release notice files."""
+def validate_source_package(zip_path: Path, archive_root: str) -> None:
+    """Validate that a source zip contains mandatory notice files."""
     expected_names = {
-        f"{SOURCE_PACKAGE_ROOT_NAME}/{PROJECT_LICENSE_FILE.name}",
-        f"{SOURCE_PACKAGE_ROOT_NAME}/{THIRD_PARTY_NOTICES_FILE.name}",
-        f"{SOURCE_PACKAGE_ROOT_NAME}/{ABOUT_FILE.name}",
+        f"{archive_root}/{PROJECT_LICENSE_FILE.name}",
+        f"{archive_root}/{THIRD_PARTY_NOTICES_FILE.name}",
+        f"{archive_root}/{ABOUT_FILE.name}",
     }
     with zipfile.ZipFile(zip_path) as archive:
         archived_names = set(archive.namelist())
@@ -568,6 +511,55 @@ def validate_binary_package(zip_path: Path) -> None:
     if missing_names:
         formatted = "\n".join(f"  - {name}" for name in missing_names)
         raise BuildError(f"Binary package is missing required file(s):\n{formatted}")
+
+
+def package_publish_source_release(publish_dir: Path) -> Path:
+    """Create the publish source zip from the git HEAD tree."""
+    git = shutil.which("git")
+    if git is None:
+        raise BuildError("git was not found in PATH.")
+
+    publish_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = publish_dir / f"{APP_NAME}-source.zip"
+    remove_existing_file(zip_path)
+
+    archive_root = f"{APP_NAME}-source"
+    command = [
+        git,
+        "archive",
+        "--format=zip",
+        f"--prefix={archive_root}/",
+        "--output",
+        str(zip_path),
+        "HEAD",
+    ]
+    result = subprocess.run(command, cwd=PROJECT_ROOT, check=False)
+    if result.returncode != 0:
+        raise BuildError(f"git archive failed with exit code {result.returncode}.")
+
+    validate_source_package(zip_path, archive_root)
+    return zip_path
+
+
+def package_publish_binary_release(release_dir: Path, publish_dir: Path) -> Path:
+    """Copy the PyInstaller output to Publish and create the app zip."""
+    publish_app_dir = publish_dir / APP_NAME
+    publish_app_dir.mkdir(parents=True, exist_ok=True)
+
+    remove_existing_file(publish_app_dir / executable_name())
+    remove_existing_path(publish_app_dir / LIB_DIR_NAME)
+    shutil.copy2(release_dir / executable_name(), publish_app_dir / executable_name())
+    shutil.copytree(release_dir / LIB_DIR_NAME, publish_app_dir / LIB_DIR_NAME)
+
+    zip_path = publish_dir / f"{APP_NAME}.zip"
+    remove_existing_file(zip_path)
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for release_file in sorted(path for path in publish_app_dir.rglob("*") if path.is_file()):
+            archive_name = Path(publish_app_dir.name) / release_file.relative_to(publish_app_dir)
+            archive.write(release_file, archive_name.as_posix())
+
+    validate_binary_package(zip_path)
+    return zip_path
 
 
 def pyinstaller_command(
@@ -621,66 +613,12 @@ def pyinstaller_command(
     return command
 
 
-def version_info_file_path(platform_build_dir: Path) -> Path:
-    """Return the generated Windows version-info file path for one build."""
-    return platform_build_dir / VERSION_INFO_FILE_NAME
 
 
-def write_version_info_file(platform_build_dir: Path) -> Path:
-    """Generate a PyInstaller Windows version-info file from the app version."""
-    version_info_file = version_info_file_path(platform_build_dir)
-    version_info_file.parent.mkdir(parents=True, exist_ok=True)
-    version_info_file.write_text(_format_version_info_file(), encoding="utf-8")
-    return version_info_file
 
 
-def _format_version_info_file() -> str:
-    version_tuple = _windows_version_tuple(APP_VERSION)
-    return f"""# UTF-8
-#
-# Generated by build_release.py from app.version.
-VSVersionInfo(
-  ffi=FixedFileInfo(
-    filevers={version_tuple},
-    prodvers={version_tuple},
-    mask=0x3f,
-    flags=0x0,
-    OS=0x40004,
-    fileType=0x1,
-    subtype=0x0,
-    date=(0, 0)
-  ),
-  kids=[
-    StringFileInfo([
-      StringTable(
-        '040904B0',
-        [
-          StringStruct('CompanyName', 'j3'),
-          StringStruct('FileDescription', '{APP_NAME}'),
-          StringStruct('FileVersion', '{APP_VERSION}'),
-          StringStruct('InternalName', '{APP_NAME}'),
-          StringStruct('OriginalFilename', '{APP_NAME}.exe'),
-          StringStruct('ProductName', '{APP_NAME}'),
-          StringStruct('ProductVersion', '{APP_VERSION}')
-        ]
-      )
-    ]),
-    VarFileInfo([VarStruct('Translation', [1033, 1200])])
-  ]
-)
-"""
 
 
-def _windows_version_tuple(version_text: str) -> tuple[int, int, int, int]:
-    numeric_parts = []
-    for part in version_text.split("."):
-        match = re.match(r"(\d+)", part)
-        if match is None:
-            break
-        numeric_parts.append(int(match.group(1)))
-    while len(numeric_parts) < 4:
-        numeric_parts.append(0)
-    return tuple(numeric_parts[:4])
 
 
 def command_for_display(command: list[str]) -> str:
@@ -703,6 +641,7 @@ def validate_release_layout(release_dir: Path) -> Path:
         lib_dir / ABOUT_FILE.name,
         lib_dir / "assets" / "app_icon.ico",
         lib_dir / "assets" / "app_icon.png",
+        lib_dir / "assets" / "app_icon.svg",
         *(
             lib_dir / LICENSES_DESTINATION / static_license_file.name
             for static_license_file in STATIC_LICENSE_FILES
@@ -759,7 +698,7 @@ def open_file_manager(path: Path) -> None:
     print(f"Warning: opening file manager is not supported on {sys.platform}.", file=sys.stderr)
 
 
-def build_release() -> Path:
+def build_release(*, publish: bool) -> Path:
     """Build the release and return the app executable path."""
     pyinstaller = pyinstaller_version()
     ensure_required_files()
@@ -792,30 +731,45 @@ def build_release() -> Path:
         raise BuildError(f"PyInstaller failed with exit code {result.returncode}.")
 
     app_binary = validate_release_layout(release_dir)
-    source_package = package_source_release(platform_dist_dir)
-    binary_package = package_binary_release(
-        release_dir,
-        platform_dist_dir,
-        current_platform,
-    )
-    print(f"Source package: {source_package}")
-    print(f"Binary package: {binary_package}")
+    if publish:
+        publish_dir = PROJECT_ROOT / "Publish"
+        source_package = package_publish_source_release(publish_dir)
+        binary_package = package_publish_binary_release(release_dir, publish_dir)
+        print(f"Source package: {source_package}")
+        print(f"Binary package: {binary_package}")
     return app_binary
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build a PyInstaller onedir release.")
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not open the release directory after a successful build.",
+    )
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="Create source and binary archives under the Publish folder.",
+    )
+    return parser.parse_args(argv)
 
 
 def main() -> int:
     """Run the release build from the command line."""
+    args = parse_args()
     try:
         bootstrap_exit_code = bootstrap_build_environment()
         if bootstrap_exit_code is not None:
             return bootstrap_exit_code
-        app_binary = build_release()
+        app_binary = build_release(publish=args.publish)
     except BuildError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     print(f"Release build completed: {app_binary}")
-    open_file_manager(app_binary.parent)
+    if not args.no_open:
+        open_file_manager(PROJECT_ROOT / "Publish" if args.publish else app_binary.parent)
     return 0
 
 

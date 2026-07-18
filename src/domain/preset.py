@@ -207,6 +207,21 @@ def select_work_candidates(
     ]
 
 
+def select_manual_work_candidates(
+    candidates: list[PresetCandidate],
+    selected_candidate_ids: list[str],
+) -> list[PresetCandidate]:
+    """Select candidates by id while preserving the original analysis order."""
+    selected_ids = {
+        candidate_id.strip()
+        for candidate_id in selected_candidate_ids
+        if candidate_id.strip()
+    }
+    if not selected_ids:
+        return []
+    return [candidate for candidate in candidates if candidate.id in selected_ids]
+
+
 def build_candidates_payload(candidates: list[PresetCandidate]) -> str:
     """Serialize candidates for the ``{{candidates_payload}}`` template slot."""
     return json.dumps(

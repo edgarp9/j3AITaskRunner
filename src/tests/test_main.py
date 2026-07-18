@@ -41,6 +41,42 @@ class MainWindowBuildTests(unittest.TestCase):
         self.assertIsNotNone(window)
         self.assertEqual(["dpi", "runtime", "window"], calls)
 
+    def test_build_main_window_can_use_separate_app_base_dir(self) -> None:
+        with (
+            patch("main.configure_windows_dpi_awareness"),
+            patch("main.build_runtime") as build_runtime,
+            patch("main.MainWindow", side_effect=lambda runtime: runtime),
+        ):
+            main.build_main_window(
+                storage_root=Path(r"C:\Data"),
+                app_base_dir=Path(r"C:\Apps"),
+            )
+
+        build_runtime.assert_called_once_with(
+            storage_root=Path(r"C:\Data"),
+            app_base_dir=Path(r"C:\Apps"),
+        )
+
+    def test_build_runtime_places_watch_dir_under_app_base_dir(self) -> None:
+        with (
+            patch("main.LocalJsonRepository"),
+            patch("main.PromptStore"),
+            patch("main.ProviderAgentCliProcessRunner"),
+            patch("main.SystemSleepPreventer"),
+            patch("main.AppController"),
+            patch("main.AppRuntime") as runtime_cls,
+        ):
+            runtime = main.build_runtime(
+                storage_root=Path(r"C:\Data"),
+                app_base_dir=Path(r"C:\Apps"),
+            )
+
+        self.assertIs(runtime_cls.return_value, runtime)
+        self.assertEqual(
+            Path(r"C:\Apps") / "watch",
+            runtime_cls.call_args.kwargs["file_drop_dir"],
+        )
+
 
 class CommandLineTests(unittest.TestCase):
     def test_main_version_option_exits_without_building_window(self) -> None:
@@ -78,6 +114,25 @@ class CommandLineTests(unittest.TestCase):
         window.open_startup_workspaces.assert_not_called()
         window.run.assert_called_once_with()
 
+    def test_main_uses_data_dir_for_storage_without_moving_app_assets(self) -> None:
+        with TemporaryDirectory() as storage_dir:
+            storage_root = Path(storage_dir).resolve()
+            with (
+                patch("main.configure_logging"),
+                patch("main.resolve_default_storage_root", return_value=Path(r"C:\Apps")),
+                patch("main.build_main_window") as build_main_window,
+            ):
+                window = build_main_window.return_value
+                exit_code = main.main(["--data-dir", storage_dir])
+
+        self.assertEqual(0, exit_code)
+        build_main_window.assert_called_once_with(
+            storage_root=storage_root,
+            app_base_dir=Path(r"C:\Apps"),
+        )
+        window.open_startup_workspaces.assert_not_called()
+        window.run.assert_called_once_with()
+
     def test_main_opens_workspace_paths_from_cli_after_building_window(self) -> None:
         with TemporaryDirectory() as first_workspace:
             with TemporaryDirectory() as second_workspace:
@@ -109,6 +164,15 @@ class CommandLineTests(unittest.TestCase):
             )
 
             self.assertEqual((str(workspace_dir.resolve()),), resolved)
+
+    def test_resolve_data_dir_path_resolves_relative_path_from_cwd(self) -> None:
+        with TemporaryDirectory() as working_dir:
+            resolved = main.resolve_data_dir_path(
+                "profile",
+                base_dir=Path(working_dir),
+            )
+
+            self.assertEqual((Path(working_dir) / "profile").resolve(), resolved)
 
     def test_parse_args_accepts_workspace_paths(self) -> None:
         args = main.parse_args(["alpha", "beta"])
